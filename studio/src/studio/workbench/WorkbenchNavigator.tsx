@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ChatSessionInfo, DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
-import { sessionTaskIds, taskTargetKind } from '@/api/client'
+import { taskTargetKind } from '@/api/client'
 import { conversationTitle, useSessionOperations } from './SessionOperations'
 import { formatRelativeTime } from './TaskSessionsDisclosure'
 import {
@@ -711,9 +711,9 @@ export default function WorkbenchNavigator({
   const selectedTaskId = clickedTaskId ?? activeTaskId
   /**
    * The task the `TASKS` section shows as selected — the same expression that marks its row — and,
-   * while one is selected, the one list `SESSIONS` is about (AC-015). Membership is set membership
-   * (ADR-0014): a conversation related to several tasks is listed by each of them, and the task-less
-   * group is the conversation with no relation at all.
+   * while one is selected, the one list `SESSIONS` is about (AC-015). Membership is the conversation's
+   * assignment, never its relation set: a conversation is listed by the one task it is working on, and
+   * by `No task` while it is working on none.
    */
   const selectedWorktreeTask = targetTasks.find(task => task.taskId === selectedTaskId) ?? null
   /**
@@ -732,21 +732,29 @@ export default function WorkbenchNavigator({
     ? (selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : [])
       .filter(session => session.deviceId === selection.deviceId)
     : []
-  /** The conversations of one task: membership is set membership, so a shared one is listed by each. */
-  const sessionsOfTask = (taskId: string) =>
-    deviceSessions.filter(session => sessionTaskIds(session).includes(taskId))
+  /**
+   * The task a conversation is assigned to — its primary relation, which is at most one, so a
+   * conversation can be listed under exactly one heading and never twice. A conversation related to
+   * several tasks is listed under the one it works on, not under each of them.
+   */
+  const assignedTaskId = (session: ChatSessionInfo) =>
+    session.taskId ?? session.taskRelations?.find(relation => relation.isPrimary)?.taskId ?? null
+  /** The conversations assigned to one task. */
+  const sessionsAssignedTo = (taskId: string) =>
+    deviceSessions.filter(session => assignedTaskId(session) === taskId)
   /**
    * The groups the section shows, in order. A selected task is the whole list, which is the rule the
    * section was built on. A selected device with no task selected is the device's entire list: the
-   * conversations no task is related to first, under `No task`, then one group per task that owns one.
-   * The owning tasks are the selected device's own — the order `TASKS` lists them in — followed by any
-   * other task of the worktree that owns one of them, which re-binding a conversation can produce. So
-   * every group a device's list can produce is present and no conversation it holds is unreachable.
+   * conversations working on no task first, under `No task`, then one group per task that at least one
+   * of them is working on. The assigned tasks are the selected device's own — the order `TASKS` lists
+   * them in — followed by any other task of the worktree that one of them is assigned to, which
+   * re-binding a conversation can produce. So every group the device's list can produce is present,
+   * every conversation is in exactly one of them, and none of them is unreachable.
    */
-  const tasksOwningDeviceSessions = [
+  const tasksAssignedDeviceSessions = [
     ...targetTasks.map(task => task.taskId),
-    ...[...new Set(deviceSessions.flatMap(session => sessionTaskIds(session)))]
-      .filter(taskId => !targetTasks.some(task => task.taskId === taskId)),
+    ...[...new Set(deviceSessions.map(assignedTaskId))].filter((taskId): taskId is string =>
+      taskId !== null && !targetTasks.some(task => task.taskId === taskId)),
   ]
   const sessionGroups: { key: string; title: string; sessions: ChatSessionInfo[] }[] = !sessionsSectionVisible
     ? []
@@ -754,18 +762,18 @@ export default function WorkbenchNavigator({
       ? [{
         key: selectedWorktreeTask.taskId,
         title: selectedWorktreeTask.title,
-        sessions: sessionsOfTask(selectedWorktreeTask.taskId),
+        sessions: sessionsAssignedTo(selectedWorktreeTask.taskId),
       }]
       : [
       {
         key: 'unbound',
         title: 'No task',
-        sessions: deviceSessions.filter(session => sessionTaskIds(session).length === 0),
+        sessions: deviceSessions.filter(session => assignedTaskId(session) === null),
       },
-      ...tasksOwningDeviceSessions.map(taskId => ({
+      ...tasksAssignedDeviceSessions.map(taskId => ({
         key: taskId,
         title: selectedTasks.find(task => task.taskId === taskId)?.title ?? taskId,
-        sessions: sessionsOfTask(taskId),
+        sessions: sessionsAssignedTo(taskId),
       })),
     ].filter(group => group.sessions.length > 0)
   const sessionRowCount = sessionGroups.reduce((total, group) => total + group.sessions.length, 0)
