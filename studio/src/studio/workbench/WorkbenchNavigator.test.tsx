@@ -1060,9 +1060,10 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('lists a conversation related to several tasks under each of them, and never as task-less (AC-015)', async () => {
+  it('lists a conversation under the one task it is assigned to, never under every task it is related to (AC-015)', async () => {
     const key = 'wb-direct:wt-descendant'
-    // The same conversation is related to two device tasks; a second one is related to nothing.
+    // One conversation is assigned to the device task and merely related to a second one; another is
+    // assigned to nothing and related to nothing.
     const twoTasks = {
       [key]: [...targetTasks[key], graphTask({ taskId: 'task-alarm', title: 'Alarm task', deviceId: 'plc-1', targetKind: 'device' })],
     }
@@ -1078,7 +1079,7 @@ describe('WorkbenchNavigator sessions section', () => {
     }
     const props = { devicesByWorktree, tasksByWorktree: twoTasks, sessionsByWorktree: shared }
 
-    // The first task's list holds it, under that task's heading.
+    // The task it is assigned to holds it, under that task's heading.
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection, activeTaskId: 'task-device', ...props,
     })
@@ -1086,24 +1087,59 @@ describe('WorkbenchNavigator sessions section', () => {
     expect(section(host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-device')
     expect(section(host, 'sessions').textContent).not.toContain('Ad-hoc question')
 
-    // The second task lists the same conversation, because membership is a set and not one field.
+    // The task it is only related to does not: being related to a task is not working on it, so that
+    // task owns no conversation to show and says so.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, activeTaskId: 'task-alarm', ...props })} />,
     ))
-    expect(section(host, 'sessions').textContent).toContain('Alarm task')
-    expect(section(host, 'sessions').textContent).toContain('Shared finding')
-    expect(section(host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-alarm')
+    expect(section(host, 'sessions').textContent).toContain('No conversations for this task yet.')
+    expect(section(host, 'sessions').textContent).not.toContain('Shared finding')
 
-    // With no task selected the device's whole list is shown, and the shared conversation sits under
-    // each task that owns it — never under `No task`, which is the conversation with no relation.
+    // With no task selected the device's whole list is shown, and each conversation is in exactly one
+    // group: the task it is assigned to, or `No task`. The task it is only related to has no group,
+    // because no conversation is working on it.
     await act(async () => root.unmount())
     const taskless = await renderNavigator(null, false, { selection: deviceSelection, ...props })
     expect(sessionGroup(taskless.host, 'unbound').textContent).toContain('Ad-hoc question')
     expect(sessionGroup(taskless.host, 'unbound').textContent).not.toContain('Shared finding')
     expect(sessionGroup(taskless.host, 'task-device').textContent).toContain('Shared finding')
-    expect(sessionGroup(taskless.host, 'task-alarm').textContent).toContain('Shared finding')
+    expect(sessionGroup(taskless.host, 'task-alarm')).toBeNull()
+    // Every conversation appears exactly once, which is what the grouping is for.
+    const rows = Array.from(section(taskless.host, 'sessions').querySelectorAll('[data-session]'))
+      .map(node => node.getAttribute('data-session'))
+    expect(rows.sort()).toEqual(['session-shared', 'session-unbound'])
 
     await act(async () => taskless.root.unmount())
+  })
+
+  it('lists a conversation related to tasks but working on none under No task (AC-015)', async () => {
+    const key = 'wb-direct:wt-descendant'
+    const twoTasks = {
+      [key]: [...targetTasks[key], graphTask({ taskId: 'task-alarm', title: 'Alarm task', deviceId: 'plc-1', targetKind: 'device' })],
+    }
+    // The shape a conversation is left in when it recorded findings as tasks without ever being
+    // assigned one: related to both, primary on neither.
+    const unassigned = {
+      [key]: [conversation({
+        sessionId: 'session-no-assignment', title: 'Recorded, not assigned', deviceId: 'plc-1',
+        taskId: null,
+        taskRelations: [relation('task-device'), relation('task-alarm')],
+      })],
+    }
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, devicesByWorktree, tasksByWorktree: twoTasks, sessionsByWorktree: unassigned,
+    })
+
+    // `No task` is the conversation working on no task, which merely being related to one does not
+    // change, and neither related task gets a group of its own out of it.
+    expect(sessionGroup(host, 'unbound').textContent).toContain('Recorded, not assigned')
+    expect(sessionGroup(host, 'task-device')).toBeNull()
+    expect(sessionGroup(host, 'task-alarm')).toBeNull()
+
+    // It is listed once, which is the whole point of grouping by the assignment.
+    expect(section(host, 'sessions').querySelectorAll('[data-session]')).toHaveLength(1)
+
+    await act(async () => root.unmount())
   })
 
   it('moves a conversation between the task list and the task-less list when its binding changes', async () => {
