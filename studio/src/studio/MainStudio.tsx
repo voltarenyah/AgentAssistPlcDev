@@ -1579,11 +1579,15 @@ export default function MainStudio() {
    * belongs to is selected first, because the write is resolved in that device's context; the tab
    * update and the session refresh that follow are the ones every conversation change already goes
    * through.
+   *
+   * The caller names the assignment, and `null` means it named none: the picker always states what the
+   * conversation is assigned to, so the server is never left to choose a task the user did not choose —
+   * which is what keeps a conversation that recorded tasks without being assigned one unassigned.
    */
   const setChatSessionTasks = async (
     session: api.ChatSessionInfo,
     taskIds: string[],
-    primaryTaskId?: string | null,
+    primaryTaskId: string | null,
   ) => {
     const { workbenchId, worktreeId, deviceId } = session
     if (!workbenchId || !worktreeId || !deviceId) {
@@ -1593,7 +1597,7 @@ export default function MainStudio() {
     setChatBusy(true)
     try {
       await api.selectDevice(workbenchId, worktreeId, deviceId)
-      const updated = await api.setChatSessionTasks(session.sessionId, taskIds, primaryTaskId)
+      const updated = await api.setChatSessionTasks(session.sessionId, taskIds, primaryTaskId, primaryTaskId === null)
       setChatTabs(previous => openTab(previous, updated))
       await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {

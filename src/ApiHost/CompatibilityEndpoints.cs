@@ -536,13 +536,17 @@ public static class CompatibilityEndpoints
             var primaryTaskId = body.TryGetProperty("primaryTaskId", out var primary) && primary.ValueKind == JsonValueKind.String
                 ? primary.GetString()
                 : null;
+            // The caller's own decision that the conversation is assigned to none of its relations. An
+            // absent primaryTaskId cannot express it: absent means "resolve one".
+            var unassigned = body.TryGetProperty("unassigned", out var assignment) && assignment.ValueKind == JsonValueKind.True;
             var device = ChatDevice(state, graphs, activeTasks);
             var assistantScope = Scope(body, null);
             var current = chat.LoadSession(device, id, assistantScope) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var selection = state.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
             using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
             var updated = SessionGraphOperations.ApplySet(
-                scope.Service, current, taskIds, primaryTaskId, value => SessionManager.SaveSession(device, value));
+                scope.Service, current, taskIds, primaryTaskId,
+                value => SessionManager.SaveSession(device, value), unassigned);
             chat.LoadSession(device, id, assistantScope);
             return Results.Ok(updated);
         });

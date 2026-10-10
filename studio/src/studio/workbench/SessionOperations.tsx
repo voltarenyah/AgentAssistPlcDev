@@ -6,10 +6,14 @@ import { Button } from '@/components/ui/button'
 import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 /** The title a conversation shows, falling back the way its task surface already does. */
 export const conversationTitle = (session: ChatSessionInfo) =>
   session.title?.trim() || session.firstUserMessage?.trim() || 'Untitled conversation'
+
+/** The picker's value for "related to these tasks, assigned to none of them". */
+const NO_ASSIGNMENT = 'none'
 
 export type SessionOperationsOptions = {
   /**
@@ -18,7 +22,13 @@ export type SessionOperationsOptions = {
    */
   tasks: EngineeringTask[]
   onRename?: (session: ChatSessionInfo, title: string) => void
-  onSetTasks?: (session: ChatSessionInfo, taskIds: string[], primaryTaskId?: string | null) => void
+  /**
+   * Writes the conversation's whole relation set. The picker always names the assignment it is
+   * showing, including naming none — a caller that receives `null` writes a conversation related to
+   * its tasks and assigned to none of them, rather than leaving the server to choose one
+   * (ADR-0014, AC-019).
+   */
+  onSetTasks?: (session: ChatSessionInfo, taskIds: string[], primaryTaskId: string | null) => void
   onDelete?: (session: ChatSessionInfo) => void
 }
 
@@ -38,11 +48,12 @@ export type SessionOperations = {
  * set of tasks it is related to, and deleting it — held once so a second surface that lists
  * conversations cannot offer a diverging copy of them.
  *
- * The picker opens on the conversation's current relations, so every check reflects a relation the
- * conversation already has, an apply that changes nothing writes the same set back, and a relation the
- * picker cannot offer — which the write path would refuse to create — is preserved instead of being
- * dropped by a set that never showed it. One apply writes the whole set, which is what keeps a
- * conversation from being left half-linked (ADR-0014, AC-019).
+ * The picker opens on the conversation's current relations and on the task it is assigned to, so every
+ * check and the assignment both reflect state the conversation already has, an apply that changes
+ * nothing writes the same thing back, and a relation the picker cannot offer — which the write path
+ * would refuse to create — is preserved instead of being dropped by a set that never showed it. One
+ * apply writes the whole set, which is what keeps a conversation from being left half-linked
+ * (ADR-0014, AC-019).
  */
 export function useSessionOperations({ tasks, onRename, onSetTasks, onDelete }: SessionOperationsOptions): SessionOperations {
   const [renameSession, setRenameSession] = useState<ChatSessionInfo | null>(null)
@@ -50,7 +61,10 @@ export function useSessionOperations({ tasks, onRename, onSetTasks, onDelete }: 
   const [bindSession, setBindSession] = useState<ChatSessionInfo | null>(null)
   const [bindQuery, setBindQuery] = useState('')
   const [bindSelection, setBindSelection] = useState<string[]>([])
+  /** The task the conversation is assigned to as the picker is showing it, or null for none. */
+  const [bindPrimary, setBindPrimary] = useState<string | null>(null)
   const bindableTasks = tasks.filter(task => task.deviceId)
+  const checkedTasks = bindableTasks.filter(task => bindSelection.includes(task.taskId))
 
   const openRename = (session: ChatSessionInfo) => {
     setRenameTitle(conversationTitle(session))
@@ -66,31 +80,33 @@ export function useSessionOperations({ tasks, onRename, onSetTasks, onDelete }: 
   const openBindTasks = (session: ChatSessionInfo) => {
     setBindQuery('')
     setBindSelection(sessionTaskIds(session))
+    setBindPrimary(session.taskId ?? null)
     setBindSession(session)
   }
 
-  /** A click sets a check; a second click on a checked task clears it (AC-019). */
+  /**
+   * A click sets a check; a second click on a checked task clears it (AC-019). Clearing the task the
+   * conversation is assigned to leaves it assigned to nothing rather than handing the assignment to
+   * whichever task happens to be next: being assigned is a statement the user makes, so the picker
+   * never makes it on their behalf.
+   */
   const toggleBindTask = (taskId: string) => {
     setBindSelection(previous => previous.includes(taskId)
       ? previous.filter(id => id !== taskId)
       : [...previous, taskId])
+    setBindPrimary(current => current === taskId ? null : current)
   }
 
   const closeBindTasks = () => {
     setBindSession(null)
     setBindSelection([])
+    setBindPrimary(null)
   }
 
-  /**
-   * The primary the conversation already had is named only while it is still checked, so unchecking it
-   * hands the primary to the set's own resolution — which is how the user moves it — and an apply that
-   * leaves it checked keeps it where it was (ADR-0014, AC-019).
-   */
+  /** One apply writes the set and the assignment, so the conversation is never half-linked. */
   const applyBindTasks = () => {
     if (!bindSession) return
-    const primary = bindSession.taskId
-    const keepPrimary = primary && bindSelection.includes(primary) ? primary : undefined
-    onSetTasks?.(bindSession, bindSelection, keepPrimary)
+    onSetTasks?.(bindSession, bindSelection, bindPrimary)
     closeBindTasks()
   }
 
@@ -163,6 +179,32 @@ export function useSessionOperations({ tasks, onRename, onSetTasks, onDelete }: 
             )
           })}
         </CommandList>
+        {/*
+          Relation and assignment are two statements, so they are two controls. A check is "this
+          conversation is related to that task"; this is "this is the task it is working on", which the
+          user names — including naming none, which is the state a conversation that recorded tasks
+          without ever being assigned one stays in (ADR-0014, AC-019).
+        */}
+        <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+          <span className="text-xs text-muted-foreground">Assigned task</span>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            aria-label="Assigned task"
+            value={bindPrimary ?? NO_ASSIGNMENT}
+            onValueChange={value => setBindPrimary(!value || value === NO_ASSIGNMENT ? null : value)}
+          >
+            <ToggleGroupItem value={NO_ASSIGNMENT} aria-label="Assigned to no task" className="text-xs">
+              None
+            </ToggleGroupItem>
+            {checkedTasks.map(task => (
+              <ToggleGroupItem key={task.taskId} value={task.taskId} aria-label={`Assign to ${task.title}`} className="max-w-[12rem] text-xs">
+                <span className="truncate">{task.title}</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
         <div className="flex items-center gap-2 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
           <span className="mr-auto text-xs text-muted-foreground" role="status">
             {bindSelection.length === 0 ? 'No tasks checked' : `${bindSelection.length} checked`}

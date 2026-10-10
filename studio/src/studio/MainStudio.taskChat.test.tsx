@@ -364,11 +364,13 @@ it('exports a conversation and binds a task-less one from the SESSIONS row menu'
   await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
   expect(api.setChatSessionTasks).toHaveBeenCalledTimes(1)
-  const [relateSessionId, relateTaskIds, relatePrimary] = vi.mocked(api.setChatSessionTasks).mock.calls[0]!
+  const [relateSessionId, relateTaskIds, relatePrimary, relateUnassigned] = vi.mocked(api.setChatSessionTasks).mock.calls[0]!
   expect(relateSessionId).toBe('s1')
   expect(relateTaskIds).toEqual(['task1'])
-  // The conversation had no primary to keep, so the set's own resolution decides it.
-  expect(relatePrimary).toBeUndefined()
+  // The picker names the assignment it is showing, and this conversation is assigned to none of its
+  // tasks: checking a task relates the conversation to it without assigning it (AC-019).
+  expect(relatePrimary).toBeNull()
+  expect(relateUnassigned).toBe(true)
   expect(prompt).not.toHaveBeenCalled()
   vi.unstubAllGlobals()
   await act(async () => root.unmount())

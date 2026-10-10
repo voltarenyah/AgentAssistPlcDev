@@ -646,6 +646,44 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task SessionTasksApiKeepsTheRelationsAndAssignsNoTaskWhenTheRequestSaysSo()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var first = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks", new { title = "Finding A", deviceId = "dev-1", intent = "Finding A", expectedResult = "Finding A" });
+        var firstId = (await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var second = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks", new { title = "Finding B", deviceId = "dev-1", intent = "Finding B", expectedResult = "Finding B" });
+        var secondId = (await second.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/dev-1/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("header").GetProperty("sessionId").GetString()!;
+
+        // Assigned to the first task, which is what the picker writes when the user names one.
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/tasks",
+            new { taskIds = new[] { firstId, secondId }, primaryTaskId = firstId })).StatusCode);
+        var assigned = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var assignedRelations = Assert.Single(assigned!, item => item.GetProperty("sessionId").GetString() == sessionId)
+            .GetProperty("taskRelations").EnumerateArray()
+            .ToDictionary(relation => relation.GetProperty("taskId").GetString()!, relation => relation.GetProperty("isPrimary").GetBoolean());
+        Assert.True(assignedRelations[firstId]);
+        Assert.False(assignedRelations[secondId]);
+
+        // Assigning nothing is a state of its own, and naming no primary on its own cannot express it:
+        // without the flag the server would make the set's first task the primary.
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/tasks",
+            new { taskIds = new[] { firstId, secondId }, primaryTaskId = (string?)null, unassigned = true })).StatusCode);
+        var unassigned = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var unassignedRelations = Assert.Single(unassigned!, item => item.GetProperty("sessionId").GetString() == sessionId)
+            .GetProperty("taskRelations").EnumerateArray();
+        Assert.Equal(2, unassignedRelations.Count());
+        Assert.All(unassignedRelations, relation => Assert.False(relation.GetProperty("isPrimary").GetBoolean()));
+        var reloaded = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        Assert.Equal(JsonValueKind.Null, reloaded.GetProperty("header").GetProperty("taskId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reloaded.GetProperty("header").GetProperty("taskProvenance").ValueKind);
+    }
+
+    [Fact]
     public async Task ChangingActiveTaskDoesNotMutateExistingEdges()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
@@ -1525,6 +1563,40 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         Assert.Null(ApiChatService.TaskContext(graph, fixture.Context, "ctx-none"));
         Assert.Null(ApiChatService.TaskContext(graph, fixture.Context, null));
+    }
+
+    /// <summary>
+    /// A conversation that recorded its findings as tasks is related to them and assigned to none, so
+    /// the turns that follow read them as related and read no active task. The user reported the
+    /// opposite shape — a task-less conversation whose context became the first task it created — which
+    /// is exactly what the promoted relation meant: "Active task" is what being assigned one reads as
+    /// (ADR-0014 Decision 2).
+    /// </summary>
+    [Fact]
+    public async Task TheModelTaskContextNamesTheTasksAConversationCreatedWithoutAnActiveOne()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.Context.DeviceId;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == wt);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "ctx-session", wb, wt, device));
+        for (var index = 0; index < 2; index++)
+        {
+            var task = graph.CreateTask($"ctx-created-{index}", Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree, wt,
+                $"Recorded finding {index}", Agent.Workbench.EngineeringGraph.GraphTaskType.Issue, GraphTaskStatus.Todo,
+                null, 0, "goal", "result", device);
+            graph.AddSessionTask("ctx-session", task.TaskId, Agent.Workbench.EngineeringGraph.GraphProvenance.Auto);
+        }
+
+        var context = ApiChatService.TaskContext(graph, fixture.Context, "ctx-session")!;
+
+        Assert.DoesNotContain("Active task:", context, StringComparison.Ordinal);
+        Assert.Contains("Related tasks:", context, StringComparison.Ordinal);
+        Assert.Contains("Recorded finding 0", context, StringComparison.Ordinal);
+        Assert.Contains("Recorded finding 1", context, StringComparison.Ordinal);
     }
 
     private static void WriteLegacyTaskHeader(DeviceContext context, string sessionId, string taskId, string provenance)

@@ -31,11 +31,11 @@
 - **Current requirements** (binding, each traced to ADR-0014):
   1. The graph is the relation's only authority; no write path stores it in the session file
      (Decision 1).
-  2. One primary relation per conversation, expressed by `is_primary = 1` on exactly one edge
-     (Decision 2).
+  2. At most one primary relation per conversation, expressed by `is_primary = 1` on one edge, and a
+     conversation may carry none (Decision 2).
   3. A conversation's own tool call that creates a task adds the relation with provenance `auto` and
-     never moves the primary; with no primary present the created task becomes it (Decision 2, Decision
-     Details *Automatic association*).
+     nothing else: the primary is neither moved nor established, so a conversation that had none keeps
+     none (Decision 2, Decision Details *Automatic association*).
   4. Per turn the primary relation's task is injected as it is today (title, type, status, goal,
      expected result, description); every other related task is named by title and status only
      (Decision 4).
@@ -389,11 +389,14 @@ PUT /api/chat/session/tasks                         (compat twin)
 body: { taskIds: string[], primaryTaskId?: string | null }
 ```
 
-Primary resolution, server-side and deterministic: `primaryTaskId` when it is present in `taskIds`; else
+Primary resolution, server-side and deterministic: `unassigned` when the caller says the conversation is
+assigned to none of its tasks; else `primaryTaskId` when it is present in `taskIds`; else
 the conversation's current primary when it is still in `taskIds`; else the first element of `taskIds`;
-else none. The UI Spec's picker (AC-019, row `:79`) sets relations only, so the client sends the primary
-it read when that task is still checked and omits it otherwise — which is also how a user moves the
-primary (uncheck it, and the next checked task becomes it). The response is the conversation with the
+else none. The UI Spec's picker (AC-019, row `:79`) sets relations *and* the assignment, so the client
+always sends the one it is showing — the conversation's current primary while that task is still
+checked, or `unassigned` — because checking a task relates the conversation to it without assigning it,
+and an apply that named nothing would let the server pick a task the user did not pick. The response is
+the conversation with the
 projected primary, matching the existing `/task` routes' response so `MainStudio`'s tab update
 (`:1551`) keeps working. Both existing `PUT …/task` routes stay as "set the primary relation", mapped
 onto `SetSessionTasks` with the current set plus (or minus) the named primary, which keeps every current
@@ -509,7 +512,8 @@ recoverable only from a legacy header that has not yet been written.
 | Clearing every relation from a legacy conversation sticks | L1 | the same lane — the set route with `taskIds: []` on a header-carrying file, then a rename | The relation set is empty after both writes and nothing re-imports (AC-009) |
 | The set route replaces the whole set atomically | L1 | the same lane — a set change applied in one request, and the persist-failure rollback case | One edge set after one request; on an injected file-write failure the graph keeps the pre-request set (AC-012) |
 | The existing `PUT …/task` routes still work | L1 | the same lane — both routes, on a conversation with two relations | The named task becomes the primary, the other relation survives (AC-012) |
-| `create_task` establishes the relation | L1 | the same lane (`TaskCreationToolTests`) — an approved call from a conversation with and without a primary, and with an injected edge-write failure | A relation with `auto` provenance is added, the primary moves only in the second case, and the failure case still reports the created task with `relationWarning` (AC-010) |
+| `create_task` establishes the relation and nothing else | L1 | the same lane (`TaskCreationToolTests`) — an approved call from a conversation with and without a primary, two calls from a conversation with none, and with an injected edge-write failure | A relation with `auto` provenance is added, the primary is untouched in both cases so a conversation that had none still has none, and the failure case still reports the created task with `relationWarning` (AC-010) |
+| The set route can assign none | L1 | the same lane — the set route with two relations and `unassigned` | Both relations survive and the conversation carries no primary (`WorkbenchEndpointsTests`) |
 | The model context degrades per link | L1 | the same lane — a turn with a resolvable primary, a second related task, a deleted task and a device-mismatched task among the relations | The primary block appears unchanged, the related line names only the resolvable others, and the turn completes (AC-011) |
 | The picker is a checked set applied once | L1 | `npm test -- --run` in `studio/` (`WorkbenchNavigator.test.tsx`) | The offered options carry checks for the current relations; a second click clears; one apply call carries the whole set (UI Spec AC-019) |
 | `SESSIONS` and the task surface use set membership | L1 | the same lane (`WorkbenchNavigator.test.tsx`, `WorktreeTasksPanel.test.tsx`) | A conversation related to two tasks appears in each task's list, and a related conversation leaves the task-less list (UI Spec AC-015) |

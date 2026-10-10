@@ -997,12 +997,13 @@ describe('WorkbenchNavigator sessions section', () => {
     expect(onSetSessionTasks).not.toHaveBeenCalled()
     const apply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
     await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    // The conversation had no primary to keep, so the primary is left to the set's own resolution.
+    // The conversation had no assignment, and the picker names that rather than leaving the server to
+    // choose a task the user did not choose: related to the checked task, assigned to none.
     expect(onSetSessionTasks).toHaveBeenCalledTimes(1)
     const [session, taskIds, primary] = onSetSessionTasks.mock.calls[0]!
     expect(session).toMatchObject({ sessionId: 'session-unbound' })
     expect(taskIds).toEqual(['task-device'])
-    expect(primary).toBeUndefined()
+    expect(primary).toBeNull()
 
     // Clearing every check is one apply too: the set it writes is empty.
     await act(async () => root.render(
@@ -1025,7 +1026,37 @@ describe('WorkbenchNavigator sessions section', () => {
     const [clearedSession, clearedIds, clearedPrimary] = onSetSessionTasks.mock.calls[1]!
     expect(clearedSession).toMatchObject({ sessionId: 'session-bound' })
     expect(clearedIds).toEqual([])
-    expect(clearedPrimary).toBeUndefined()
+    expect(clearedPrimary).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('assigns a conversation to none of its tasks without dropping the relations (AC-019)', async () => {
+    const onSetSessionTasks = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onSetSessionTasks,
+    })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    const bind = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Tasks…')!
+    await act(async () => bind.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    // The conversation is assigned to the task it is related to, and the picker says so.
+    const assigned = document.body.querySelector('[aria-label="Assigned task"]') as HTMLElement
+    expect(assigned.textContent).toContain('None')
+    expect(assigned.textContent).toContain('Device task')
+
+    // Assigning none keeps every relation and clears the assignment: assignment is a statement the
+    // user makes, so it has to be one they can take back (AC-019).
+    const none = assigned.querySelector('[aria-label="Assigned to no task"]') as HTMLButtonElement
+    await act(async () => none.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const apply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
+    await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onSetSessionTasks).toHaveBeenCalledTimes(1)
+    const [session, taskIds, primary] = onSetSessionTasks.mock.calls[0]!
+    expect(session).toMatchObject({ sessionId: 'session-bound' })
+    expect(taskIds).toEqual(['task-device'])
+    expect(primary).toBeNull()
     await act(async () => root.unmount())
   })
 

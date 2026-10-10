@@ -30,7 +30,7 @@ type Props = {
   onOpenSession?: (session: api.ChatSessionInfo) => void
   onRenameSession?: (session: api.ChatSessionInfo, title: string) => void
   onExportSession?: (session: api.ChatSessionInfo) => void
-  onSetSessionTasks?: (session: api.ChatSessionInfo, taskIds: string[], primaryTaskId?: string | null) => void
+  onSetSessionTasks?: (session: api.ChatSessionInfo, taskIds: string[], primaryTaskId: string | null) => void
   onDeleteSession?: (session: api.ChatSessionInfo) => void
 }
 

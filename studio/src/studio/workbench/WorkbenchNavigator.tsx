@@ -119,10 +119,11 @@ type Props = {
   onExportSession?: (session: ChatSessionInfo) => void
   /**
    * Writes a conversation's whole task relation set in one operation (AC-019). `primaryTaskId` names
-   * the relation the conversation works on, and is sent only while it is one of `taskIds`; an empty
-   * set clears every relation.
+   * the task the conversation is assigned to, and `null` says it is assigned to none of the tasks it
+   * is related to — the picker always names one or the other, so it never leaves the assignment to the
+   * server to choose (ADR-0014).
    */
-  onSetSessionTasks?: (session: ChatSessionInfo, taskIds: string[], primaryTaskId?: string | null) => void
+  onSetSessionTasks?: (session: ChatSessionInfo, taskIds: string[], primaryTaskId: string | null) => void
   /** Deletes a conversation, after the user confirms. */
   onDeleteSession?: (session: ChatSessionInfo) => void
   /**

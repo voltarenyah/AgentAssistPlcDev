@@ -87,8 +87,12 @@ Decided by the user on 2026-10-08:
    written after this change.
 2. **One primary relation survives.** `taskId` keeps its meaning — "the task this conversation is
    working on" — and is carried by exactly one edge per conversation with `is_primary = 1`.
-   Automatic association only adds relations; it never moves the primary. A conversation whose primary
-   is empty and which gains its first relation makes that relation primary.
+   Automatic association only adds relations; it never sets a primary. A conversation gains one by
+   being created for a task, by importing a legacy header that carried one, or by the user naming it,
+   and a conversation that has none stays without one however many relations it accumulates.
+   *Amended 2026-10-10: v1.0 read "a conversation whose primary is empty and which gains its first
+   relation makes that relation primary", which made the first task a conversation recorded an
+   assignment the user never made. See the Update History.*
 3. **The Workbench Assistant's conversation is out of scope.** It lives outside the worktree session
    store (`%LOCALAPPDATA%\AutomationWorkbench\assistant\session.json`), is not a graph session entity,
    and is not listed by the `SESSIONS` section, so a relation from it would put a row on a task page
@@ -120,8 +124,8 @@ These consequences are fixed with them, because the decision is not implementabl
 |------|---------|
 | **Decision** | A conversation's task relations are graph edges: zero or more `task → session` edges with `relation_kind = task_session`, at most one of them primary. The session file no longer carries the relation as state. |
 | **Authority** | The engineering graph only. No write path stores the relation in the session file; the file's legacy `taskId` is read once, when that session is next written, and imported into the graph if the session has no relation yet. |
-| **Primary** | Exactly one relation per conversation may carry `is_primary = 1`, enforced by a partial unique index. It means "the task this conversation is working on" and is what the model's task context, and only that, is built from. |
-| **Automatic association** | A conversation's own tool call that creates a task adds a relation with provenance `auto` and never moves the primary. With no primary present, the created task becomes it. |
+| **Primary** | At most one relation per conversation may carry `is_primary = 1`, enforced by a partial unique index, and a conversation may carry none. It means "the task this conversation is working on" and is what the model's task context, and only that, is built from. The picker writes it as a statement of its own, so an apply can name a task or name none; the set write's own resolution — keep the current primary while it is still related, otherwise take the set's first task — is what a caller that names nothing at all gets, not what the picker sends. |
+| **Automatic association** | A conversation's own tool call that creates a task adds a relation with provenance `auto`, and that is all it does: the primary is neither moved nor established, so a conversation that had none keeps none. Being assigned to a task is the user's statement about the conversation — made when it is created for a task, restored from a legacy header, or named in the picker — never a side effect of the conversation recording what it found. |
 | **Out of scope** | The Workbench Assistant's conversation; relations to a task that cannot own a conversation (no device, or project scope); any task mutation other than creation. |
 | **Migration** | Existing `task_session` edges are preserved; schema version 7 promotes the edge of every conversation that has exactly one to primary. Legacy file headers are imported on the session's next write, never by a read. |
 | **Reconsider when** | A relation needs its own attributes (for example a per-relation note or an ordering); the Workbench Assistant should join the relation; or the model needs the full content of more than one related task per turn. |
@@ -199,6 +203,7 @@ usable.
 | Date | Version | Changes |
 |---|---|---|
 | 2026-10-08 | 1.0 | The relation moves to the graph as its only owner; one primary relation per conversation; automatic association on a conversation's own task creation; the Workbench Assistant's conversation excluded; the model sees the primary task in full and the others by title and status. Decisions 1-4 were made by the user on 2026-10-08. |
+| 2026-10-10 | 1.1 | Automatic association no longer establishes a primary. A conversation that had none and created two tasks ended up assigned to the first of them, which the turns that followed rendered as `Active task: …` — an assignment the user never made. Being assigned a task is now only ever the user's statement: it arrives with a conversation created for a task, restored from a legacy header, or named in the picker, and a conversation may carry no primary however many relations it has. The set write gains the caller's own "assigned to none" (`unassigned`), because naming no primary on its own means "resolve one" — and the picker gains the control that sends it, so an assignment can be taken back without deleting the relations. Decided by the user on 2026-10-10. |
 
 ## Related Information
 

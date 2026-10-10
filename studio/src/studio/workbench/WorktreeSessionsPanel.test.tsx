@@ -206,7 +206,7 @@ describe('WorktreeSessionsPanel', () => {
     await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
     expect(onSetSessionTasks).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'session-adhoc' }), ['task-device'], undefined)
+      expect.objectContaining({ sessionId: 'session-adhoc' }), ['task-device'], null)
 
     await act(async () => root.unmount())
   })
