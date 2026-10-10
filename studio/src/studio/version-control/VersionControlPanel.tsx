@@ -5,6 +5,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { showErrorToast } from '@/components/ui/toast'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
+import { sourceEntry } from './sourceEntries'
 
 export type VersionControlPanelProps = {
   workbenchId: string
@@ -13,8 +14,8 @@ export type VersionControlPanelProps = {
   section: 'changes' | 'history'
   /** Bumped by the page header's refresh control, which replaces the panel's own refresh button. */
   refreshSignal?: number
-  /** Reports the uncommitted source objects on screen, so the rail can badge the Changes page. */
-  onUncommittedCountChange?: (count: number) => void
+  /** Called after a commit or a savepoint lands, so the shell re-reads what the rail badges. */
+  onCommitted?: () => void
   /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
   operationStatus?: api.OperationStatus | null
@@ -25,36 +26,7 @@ export type VersionControlPanelProps = {
 
 type CompareMode = 'full' | 'task'
 
-function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSourceEntry | null {
-  const parts = entry.filePath.replace(/\\/g, '/').split('/')
-  const state = branch.toLowerCase() === 'master' ? 'Unauthorized' : entry.state === 'Added' || entry.state === 'Untracked' ? 'Added' : entry.state === 'Deleted' ? 'Deleted' : 'Modified'
-  if (parts[0] === 'hardware' && parts.length >= 2 && parts[1] !== 'staging') {
-    const file = parts.at(-1) ?? entry.filePath
-    return {
-      filePath: entry.filePath,
-      deviceId: 'project',
-      plcName: 'Hardware',
-      category: 'Hardware',
-      objectName: file,
-      state,
-      authorizedOnMaster: true,
-    }
-  }
-  if (parts.length < 5 || parts[0] !== 'devices' || parts[2] !== 'source' || !entry.filePath.toLowerCase().endsWith('.xml')) return null
-  const category = parts[3] === 'Blocks' ? 'Block' : parts[3] === 'DB' ? 'DB' : parts[3] === 'UDT' ? 'Udt' : parts[3] === 'Tags' ? 'Tags' : parts[3]
-  const file = parts.at(-1) ?? entry.filePath
-  return {
-    filePath: entry.filePath,
-    deviceId: parts[1],
-    plcName: parts[1],
-    category,
-    objectName: file.replace(/\.xml$/i, ''),
-    state,
-    authorizedOnMaster: branch.toLowerCase() !== 'master',
-  }
-}
-
-export default function VersionControlPanel({ workbenchId, worktreeId, section, refreshSignal = 0, onUncommittedCountChange, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, section, refreshSignal = 0, onCommitted, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [timeline, setTimeline] = useState<api.VersionControlTimelineResult | null>(null)
@@ -232,14 +204,6 @@ export default function VersionControlPanel({ workbenchId, worktreeId, section, 
 
   const entries = useMemo(() => (status?.entries ?? []).map(entry => sourceEntry(entry, branch)).filter((entry): entry is VersionControlSourceEntry => entry !== null), [status, branch])
 
-  // The rail badges the Changes item, so only the half that shows uncommitted objects reports —
-  // a history instance reporting its own empty count would clear that badge.
-  const uncommittedCount = section === 'changes' && worktreeId ? entries.length : 0
-  useEffect(() => {
-    if (section !== 'changes') return
-    onUncommittedCountChange?.(uncommittedCount)
-  }, [onUncommittedCountChange, uncommittedCount, section])
-
   // Merged timeline for the history page: git commits (joined with the
   // validation log by sha) plus SVN savepoints, newest first.
   const timelineItems = useMemo<VcTimelineItem[]>(() => {
@@ -389,7 +353,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, section, 
               hardwareDiffers,
             }}
             untrackablePendingSavepoint={untrackablePendingSavepoint}
-            onCommitted={() => void refresh()}
+            onCommitted={() => { void refresh(); onCommitted?.() }}
             onBeginOperation={onBeginOperation}
             operationStatus={operationStatus}
           />

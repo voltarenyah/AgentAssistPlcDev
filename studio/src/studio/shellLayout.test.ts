@@ -41,10 +41,12 @@ describe('shell layout', () => {
     expect(DEFAULT_SHELL_LAYOUT.rightPanelCollapsed).toBe(false)
   })
 
-  it('clamps left and right widths to their safe ranges', () => {
+  it('clamps each side to its own safe range', () => {
     expect(clampDockWidth('left', 100)).toBe(240)
     expect(clampDockWidth('left', 999)).toBe(420)
-    expect(clampDockWidth('right', 100)).toBe(240)
+    // The right column's page keeps the version-control toolbar on one row, so its floor is the
+    // default page width itself — which is also what a migrated v1 layout lands on.
+    expect(clampDockWidth('right', 100)).toBe(266)
     expect(clampDockWidth('right', 999)).toBe(420)
   })
 
@@ -74,7 +76,7 @@ describe('shell layout', () => {
       leftOpen: true,
       leftWidth: 420,
       rightColumnOpen: false,
-      rightPanelWidth: 240,
+      rightPanelWidth: 266,
       rightPanel: null,
       rightPanelCollapsed: true,
     })

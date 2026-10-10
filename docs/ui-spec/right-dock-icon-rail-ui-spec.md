@@ -53,6 +53,8 @@ interactions.
 | `Changes` page | Extend `VersionControlPanel`'s changes half | worktree, compare scope, task context | The compare scope controls move inside this page; the snapshot area stays pinned at its bottom | AC-007 |
 | `History` page | Extend `VersionControlPanel`'s history half | worktree, timeline reads | Renders the timeline; never renders the compare controls | AC-008 |
 | Content derivation | Extend `resolveContextDock` | selection, focused workspace view, knowledge context | Returns each page's content kind (or none) instead of the dock's visibility | AC-001, AC-006, AC-009 |
+| Empty state | New, `RightDockEmptyState` | icon, title, what to select, the scope | One component for every page's empty state, so a page with nothing to show still says what it is for | AC-009 |
+| Uncommitted count | New, `version-control/sourceEntries.ts` | a worktree's status read | The one mapping from status entries to source objects; the changes page lists them and the shell counts them for the badge and the header chip | AC-012 |
 | Stored layout | Extend `shellLayout` | local storage | Reads and writes v2, migrates v1, clamps the page width | AC-005 |
 
 ### State / Display Detail
@@ -99,17 +101,17 @@ interactions.
 |---|---|---|
 | AC-001 | The right column and its rail exist on every surface | L1: `contextDock.test.ts` over the full selection matrix; L2: the `MainStudio` dock suites assert the rail renders for a device on a chat, source, and inspector focus, and at the project level |
 | AC-002 | The rail carries `Properties`, `Changes`, `History` in that order | L1: a rail component test asserting the item order and names |
-| AC-003 | Click opens, click on another switches, click on the open one collapses and keeps it marked | L1: a rail component test; L2: `MainStudio` test driving the three clicks and asserting the page state and the marking |
-| AC-004 | The page clamps to 240–420 px and the rail is never squeezed | L1: `shellLayout.test.ts` over the clamp; L2: a drag test asserting the page width and the rail's fixed width |
+| AC-003 | Click opens, click on another switches, click on the open one collapses and keeps it marked, and a collapsed page offers a labelled expand handle at the rail's foot | L1: a rail component test; L2: `MainStudio` tests driving the three clicks, asserting the page state, the marking, and the handle's appearance and target |
+| AC-004 | The page clamps to 266–420 px and the rail is never squeezed | L1: `shellLayout.test.ts` over the per-side clamp; L2: a drag test asserting the page width and the rail's fixed width. The floor is the default page width, which is the narrowest the version-control toolbar fits on one row |
 | AC-005 | Page, page width, and column visibility persist; v1 migrates width-preservingly; reset restores defaults | L1: `shellLayout.test.ts` (read/write/migrate/reset); L2: a reload test asserting the restored state |
-| AC-006 | `Properties` follows the selection and names what it shows | L1: the existing three dock tests, re-pointed at the page; L2: selecting a device and a hardware node and asserting the page content |
+| AC-006 | `Properties` follows the selection and names what it shows, including the worktree's hardware node on its configuration, BOM and network pages | L1: the existing three dock tests, re-pointed at the page, plus `contextDock.test.ts`; L2: selecting a device and a hardware node, then switching the hardware page, and asserting the page still describes that node |
 | AC-007 | `Changes` is the working-tree surface with its controls inside it | L1: `VersionControlPanel`/`VersionControlChanges` tests; L2: a run asserting the compare controls are absent from `History` |
 | AC-008 | `History` renders the timeline | L1: `VersionControlHistory` test through the panel |
-| AC-009 | Every page has a named empty state; no page is blank | L1: page tests for the no-selection and empty cases |
+| AC-009 | Every page has an empty state that names the page's purpose, what to select, and the scope it is looking at, through one shared component | L1: `RightDockEmptyState` test plus the page tests for the no-selection and empty cases |
 | AC-010 | The expand/collapse animation follows the shell's dock motion, and reduced motion is honoured | L1: a class/attribute assertion on the animated container; L3: the running app, driven with Playwright, recording the page's width over the transition |
 | AC-011 | The rail is a keyboard-reachable, named, tooltipped vertical tablist | L1: a rail test asserting roles, names, and `↑`/`↓` behaviour |
-| AC-012 | The `Changes` icon carries an uncommitted-object count, and no badge when clean | L1: a rail test with and without a count |
-| AC-013 | The title bar control hides and shows the whole column everywhere | L2: the existing dock-toggle suites |
+| AC-012 | The `Changes` icon carries an uncommitted-object count read by the shell, so it is there before the changes page has ever been opened; no badge when clean; the page header repeats the count as a chip | L1: `sourceEntries.test.ts` for the mapping and count, a rail test with and without a count, and a `MainStudio` test whose status read is answered while no page is open |
+| AC-013 | The title bar control hides and shows the whole column, rail included, and says so; the rail's own gesture only folds the page | L2: the existing dock-toggle suites plus a `MainStudio` test asserting both states and their labels |
 | AC-014 | A page switch does not remount the version-control surface | L1: a `MainStudio` test asserting the version-control page keeps its state across a switch |
 
 ## Open User Decisions
@@ -125,3 +127,4 @@ interactions.
 | Date | Version | Change |
 |---|---|---|
 | 2026-10-08 | 1.0 | Initial specification. Supersedes the clause, added to `docs/adr/ADR-0009-navigator-sessions-section.md` on 2026-10-03, that a device on a chat or source view resolves to no dock at all: the dock now exists on every surface, and the navigator's `SESSIONS` section remains the only surface that lists a device's conversations. |
+| 2026-10-10 | 1.1 | Review of the running app. **The open page was clipped out of the column**: `forceMount` kept all three page wrappers mounted *and in the layout*, so three 266 px boxes packed to the track's right edge left the open page outside the clip unless it happened to be the last one (measured: the open `Properties` page at x=438 in a track at x=970). The wrappers are now hidden explicitly, which keeps every page mounted without letting a hidden one take space. Also: the rail items are centred 30 px squares; a collapsed page grows a labelled expand handle, and the title bar's control says it hides the whole column, so "fold the page" and "hide the dock" are no longer the same gesture twice; the `Properties` page describes the worktree's hardware node on the configuration, BOM and network pages alike; the uncommitted count is the shell's own read (`sourceEntries.ts` holds the one mapping), so the rail badges and the page header chips it before the changes page has ever been opened; the page floor rises to the default 266 px, the narrowest the toolbar fits on one row; and every empty state goes through `RightDockEmptyState`. |

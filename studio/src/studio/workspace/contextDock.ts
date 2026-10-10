@@ -29,22 +29,20 @@ export type ContextDockInputs = {
   worktreeId: string | null
   deviceId: string | null
   mainViewKind: 'project' | 'worktree' | 'hardware' | 'device'
-  hardwarePage: 'tree' | 'bom' | 'network' | null
   focusedView: WorkspaceViewKind | null
   hasKnowledgeContext: boolean
 }
 
 /** A selected device owns the page on every focus; knowledge wins only with a selection of its own. */
 const resolveProperties = (inputs: ContextDockInputs): PropertiesDockKind | null => {
-  const { worktreeId, deviceId, mainViewKind, hardwarePage, focusedView, hasKnowledgeContext } = inputs
+  const { worktreeId, deviceId, mainViewKind, focusedView, hasKnowledgeContext } = inputs
   if (!worktreeId) return null
   if (deviceId !== null) {
     return focusedView === 'knowledge' && hasKnowledgeContext ? 'knowledge' : 'device'
   }
-  // The hardware tree page shows the worktree's hardware target with no device selected. The BOM and
-  // network pages clear the shell's hardware view, so their node selection has nothing to describe
-  // and the page keeps its empty state.
-  return mainViewKind === 'hardware' && hardwarePage === 'tree' ? 'hardware' : null
+  // The worktree's hardware target has one node selection shared by its configuration, BOM and
+  // network pages, so the properties page describes that selection on all three.
+  return mainViewKind === 'hardware' ? 'hardware' : null
 }
 
 export const resolveContextDock = (inputs: ContextDockInputs): ContextDockState => {

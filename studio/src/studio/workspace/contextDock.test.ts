@@ -6,7 +6,6 @@ const base: ContextDockInputs = {
   worktreeId: 'wt1',
   deviceId: 'dev1',
   mainViewKind: 'device',
-  hardwarePage: null,
   focusedView: 'overview',
   hasKnowledgeContext: true,
 }
@@ -38,20 +37,13 @@ describe('resolveContextDock', () => {
       .toEqual({ properties: 'device', defaultPage: 'properties' })
   })
 
-  it('gives the worktree hardware target the hardware panel on its tree page', () => {
-    expect(resolve({ deviceId: null, mainViewKind: 'hardware', hardwarePage: 'tree' }))
+  it('gives the worktree hardware target the hardware panel on every one of its pages', () => {
+    // The configuration, BOM and network pages share one node selection, so the page describes that
+    // selection on all three rather than leaving two of them with a hint that contradicts the screen.
+    expect(resolve({ deviceId: null, mainViewKind: 'hardware' }))
       .toEqual({ properties: 'hardware', defaultPage: 'properties' })
-    expect(resolve({ deviceId: null, mainViewKind: 'hardware', hardwarePage: 'tree', focusedView: 'chat' }))
+    expect(resolve({ deviceId: null, mainViewKind: 'hardware', focusedView: 'chat' }))
       .toEqual({ properties: 'hardware', defaultPage: 'properties' })
-  })
-
-  it('leaves the properties page empty on a hardware page that has no node selection', () => {
-    // A worktree is still selected, so the rail opens its working tree; only the properties page has
-    // nothing to describe.
-    for (const hardwarePage of ['bom', 'network'] as const) {
-      expect(resolve({ deviceId: null, mainViewKind: 'hardware', hardwarePage }), hardwarePage)
-        .toEqual({ properties: null, defaultPage: 'changes' })
-    }
   })
 
   it('has no properties panel on the worktree landing page and opens its working tree', () => {
@@ -74,18 +66,15 @@ describe('resolveContextDock', () => {
     const worktrees = [null, 'wt1']
     const devices = [null, 'dev1']
     const views = ['project', 'worktree', 'hardware', 'device'] as const
-    const pages = ['tree', 'bom', 'network', null] as const
     for (const worktreeId of worktrees) {
       for (const deviceId of devices) {
         for (const mainViewKind of views) {
-          for (const hardwarePage of pages) {
-            for (const focusedView of ALL_FOCUSES) {
-              const state = resolveContextDock({
-                worktreeId, deviceId, mainViewKind, hardwarePage, focusedView, hasKnowledgeContext: true,
-              })
-              expect(state.defaultPage, `${worktreeId}/${deviceId}/${mainViewKind}/${hardwarePage}/${focusedView}`)
-                .toMatch(/^(properties|changes|history)$/)
-            }
+          for (const focusedView of ALL_FOCUSES) {
+            const state = resolveContextDock({
+              worktreeId, deviceId, mainViewKind, focusedView, hasKnowledgeContext: true,
+            })
+            expect(state.defaultPage, `${worktreeId}/${deviceId}/${mainViewKind}/${focusedView}`)
+              .toMatch(/^(properties|changes|history)$/)
           }
         }
       }

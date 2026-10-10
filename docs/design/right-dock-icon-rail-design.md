@@ -109,7 +109,10 @@ migrates width-preservingly and a v1 key that is left in place rather than delet
 | `studio/src/studio/workspace/RightDockPage.tsx` | new: the shared page frame (title, scope, refresh, collapse) |
 | `studio/src/studio/MainStudio.tsx` | render the rail column on every surface; own the page state and the refresh signal; drag the page width; keep the title bar toggle as column visibility |
 | `studio/src/studio/DevicePropertiesDock.tsx`, `HardwarePropertiesDock.tsx`, `KnowledgePropertiesDock.tsx` (+ tests) | drop each dock's own header row; become content-only panels on one type scale; `DevicePropertiesDock` and `KnowledgePropertiesDock` take `refreshSignal?: number` |
-| `studio/src/studio/version-control/VersionControlPanel.tsx` (+ test) | `section: 'changes' \| 'history'` replaces the internal nav; `refreshSignal?: number`; `onUncommittedCountChange?: (count: number) => void`; no in-page refresh button; each section fetches what it shows |
+| `studio/src/studio/version-control/VersionControlPanel.tsx` (+ test) | `section: 'changes' \| 'history'` replaces the internal nav; `refreshSignal?: number`; `onCommitted?: () => void`; no in-page refresh button; each section fetches what it shows |
+| `studio/src/studio/version-control/sourceEntries.ts` (+ test) | new: the one status-entry → source-object mapping, and the uncommitted count the shell badges |
+| `studio/src/studio/workspace/RightDockEmptyState.tsx` (+ test) | new: the shared empty state (icon, title, what to select, scope) every page uses |
+| `studio/src/studio/workspace/RightDockRail.tsx`, `RightDock.tsx`, `RightDockPage.tsx` | the rail grows a labelled expand handle at its foot while the page is collapsed; the page header takes a chip and says what its collapse control folds |
 | `studio/src/studio/settings/SettingsPage.tsx` | reset-layout copy unchanged; it now resets the page and its width together |
 | `studio/src/studio/MainStudio.rightDock.test.tsx`, `MainStudio.taskChat.test.tsx`, `MainStudio.chatFailure.test.tsx`, `MainStudio.chatConfirm.test.tsx`, `MainStudio.deviceSelect.test.tsx`, `MainStudio.apiKey.test.tsx` | re-point "no right dock" assertions at the page's content |
 | `docs/adr/ADR-0015-…md`, `docs/ui-spec/right-dock-icon-rail-ui-spec.md`, this document, `docs/plans/20261008-frontend-right-dock-icon-rail.md` | new |

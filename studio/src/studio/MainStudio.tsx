@@ -7,7 +7,9 @@ import {
   CircuitBoard,
   ClipboardList,
   CloudCog,
+  FileCheck2,
   GitBranch,
+  History,
   Loader2,
   Network,
   PanelLeftClose,
@@ -31,8 +33,10 @@ import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
 import { resolveContextDock } from '@/studio/workspace/contextDock'
 import RightDock from '@/studio/workspace/RightDock'
+import RightDockEmptyState from '@/studio/workspace/RightDockEmptyState'
 import { readWorkspaceLayout, writeWorkspaceLayout } from '@/studio/workspace/workspaceLayoutStorage'
 import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
+import { countUncommittedSourceObjects } from '@/studio/version-control/sourceEntries'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
 } from '@/studio/workbench/WorkbenchNavigator'
@@ -557,7 +561,9 @@ export default function MainStudio() {
   } | null>(null)
   /** Bumped by a page's header refresh; the panels that read their own data follow it. */
   const [dockRefreshSignal, setDockRefreshSignal] = useState(0)
-  /** The selected worktree's uncommitted object count, reported by the changes page, for the rail. */
+  /** Bumped when the worktree's version-control state changed, so the rail's badge re-reads it. */
+  const [vcStatusSignal, setVcStatusSignal] = useState(0)
+  /** The selected worktree's uncommitted object count, read by the shell for the rail's badge. */
   const [dockUncommitted, setDockUncommitted] = useState<number | null>(null)
   const [knowledgeSelection, setKnowledgeSelection] = useState<{
     node: api.GraphNode | null
@@ -634,8 +640,8 @@ export default function MainStudio() {
       : { ...previous, rightColumnOpen: !previous.rightColumnOpen })
   }, [])
 
-  /** Stable, because the changes page reports into it from an effect. */
-  const reportUncommitted = useCallback((count: number) => setDockUncommitted(count), [])
+  /** Stable, because the changes page calls it after a commit lands. */
+  const refreshDockUncommitted = useCallback(() => setVcStatusSignal(signal => signal + 1), [])
 
   const startDockResize = useCallback((side: DockSide, startX: number) => {
     // The rail is fixed, so a drag on the right changes the page's width, not the column's.
@@ -663,6 +669,28 @@ export default function MainStudio() {
       window.removeEventListener('pointerup', handlePointerUp)
     }
   }, [])
+
+  /**
+   * The rail's badge is the shell's own read. A count reported by the changes page could not appear
+   * until that page had been opened, which is exactly when the badge is least useful: it exists to
+   * tell the user there is something to come and look at.
+   */
+  useEffect(() => {
+    const workbenchId = selection.workbenchId
+    const worktreeId = selection.worktreeId
+    if (!workbenchId || !worktreeId) {
+      setDockUncommitted(null)
+      return
+    }
+    let cancelled = false
+    void api.getWorktreeVcStatus(workbenchId, worktreeId)
+      .then(status => {
+        if (cancelled) return
+        setDockUncommitted(countUncommittedSourceObjects(status, status.branch ?? ''))
+      })
+      .catch(() => { if (!cancelled) setDockUncommitted(null) })
+    return () => { cancelled = true }
+  }, [selection.workbenchId, selection.worktreeId, vcStatusSignal])
 
   const activeWorkbench = useMemo(
     () => workbenches.find(workbench => workbench.workbenchId === selection.workbenchId) ?? null,
@@ -881,7 +909,11 @@ export default function MainStudio() {
 
   useEffect(() => {
     const requestId = ++hardwareRequestId.current
-    if (!selection.workbenchId || !selection.worktreeId || selection.deviceId || hardwarePage !== 'tree') {
+    // Every hardware page shares one node selection, so the view stays loaded while the target is on
+    // screen: the properties page describes that node on the configuration, BOM and network pages
+    // alike, and switching between them must not refetch the whole configuration.
+    const hardwareTargetActive = mainView.kind === 'hardware' && !selection.deviceId
+    if (!hardwareTargetActive || !selection.workbenchId || !selection.worktreeId) {
       setHardwareView(null)
       setHardwareSelectedNodeId(null)
       setHardwareInspectedNodeId(null)
@@ -910,7 +942,7 @@ export default function MainStudio() {
           message: displayError(error),
         })
       })
-  }, [hardwarePage, selection.deviceId, selection.workbenchId, selection.worktreeId, dockRefreshSignal])
+  }, [mainView.kind, selection.deviceId, selection.workbenchId, selection.worktreeId, dockRefreshSignal])
 
   useEffect(() => {
     const requestId = ++hardwareBomRequestId.current
@@ -2232,7 +2264,6 @@ export default function MainStudio() {
     worktreeId: selection.worktreeId,
     deviceId: selection.deviceId,
     mainViewKind: mainView.kind === 'task-chat' ? 'worktree' : mainView.kind,
-    hardwarePage,
     focusedView,
     hasKnowledgeContext: knowledgeContext !== null,
   })
@@ -2265,6 +2296,9 @@ export default function MainStudio() {
 
   const refreshRightDockPage = (page: RightDockPage) => {
     setDockRefreshSignal(signal => signal + 1)
+    // The version-control pages also re-read the worktree's status, which is what the rail's badge and
+    // the page header's count show.
+    if (page !== 'properties') setVcStatusSignal(signal => signal + 1)
     // The properties page's device panel renders the snapshot the shell read when the device was
     // selected, so refreshing it means re-reading that snapshot. The hardware and knowledge panels
     // own their reads and follow the signal instead.
@@ -2286,14 +2320,12 @@ export default function MainStudio() {
     history: activeWorktree?.branch ?? null,
   }
 
-  const rightDockEmptyState = (message: string) => (
-    <div className="grid h-full place-items-center px-5 text-center text-[11px] leading-relaxed text-muted-foreground">
-      <div>
-        <Boxes className="mx-auto mb-2 h-5 w-5" />
-        {message}
-      </div>
-    </div>
-  )
+  // What the worktree has waiting, read by the shell rather than reported by a page: the badge has to
+  // be there before the changes page has ever been opened, which is exactly when it is worth seeing.
+  const rightDockChips: Partial<Record<RightDockPage, string | null>> = {
+    changes: dockUncommitted ? `${dockUncommitted} uncommitted` : null,
+    history: dockUncommitted ? `${dockUncommitted} uncommitted` : null,
+  }
 
   const rightDockPages: Record<RightDockPage, ReactNode> = {
     properties: contextDock.properties === 'device'
@@ -2310,7 +2342,14 @@ export default function MainStudio() {
               refreshSignal={dockRefreshSignal}
             />
           )
-          : rightDockEmptyState('Select a device, a hardware object, or a knowledge node to inspect its properties.'),
+          : (
+            <RightDockEmptyState
+              icon={Boxes}
+              title="Nothing selected"
+              description="Select a device, a hardware object, or a knowledge node to inspect its properties."
+              scope={activeWorktree?.branch ?? null}
+            />
+          ),
     changes: selection.workbenchId && selection.worktreeId
       ? (
         <VersionControlPanel
@@ -2318,7 +2357,7 @@ export default function MainStudio() {
           workbenchId={selection.workbenchId}
           worktreeId={selection.worktreeId}
           refreshSignal={dockRefreshSignal}
-          onUncommittedCountChange={reportUncommitted}
+          onCommitted={refreshDockUncommitted}
           onBeginOperation={(kind, label) => beginOperation(kind, label).id}
           operationStatus={activeOperation && ['compare-tia', 'accept-tia-synchronization', 'vc-commit', 'svn-savepoint'].includes(activeOperation.kind)
             ? activeOperation.status
@@ -2328,7 +2367,13 @@ export default function MainStudio() {
           onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
         />
       )
-      : rightDockEmptyState('Select a worktree to see the source changes waiting to be committed.'),
+      : (
+        <RightDockEmptyState
+          icon={FileCheck2}
+          title="No worktree selected"
+          description="Select a worktree to see the source changes waiting to be committed."
+        />
+      ),
     history: selection.workbenchId && selection.worktreeId
       ? (
         <VersionControlPanel
@@ -2341,7 +2386,13 @@ export default function MainStudio() {
           onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
         />
       )
-      : rightDockEmptyState('Select a worktree to see its commits and SVN savepoints.'),
+      : (
+        <RightDockEmptyState
+          icon={History}
+          title="No worktree selected"
+          description="Select a worktree to see its commits and SVN savepoints."
+        />
+      ),
   }
 
   // In the desktop shell the header doubles as the window caption: dragging
@@ -2685,7 +2736,10 @@ export default function MainStudio() {
             data-dock-toggle="right"
             className="icon-button"
             aria-label={shellLayout.rightColumnOpen ? 'Hide context dock' : 'Show context dock'}
-            title={shellLayout.rightColumnOpen ? 'Hide context dock' : 'Show context dock'}
+            title={shellLayout.rightColumnOpen
+              // The rail's own gesture folds one page; this control hides the whole column, rail and all.
+              ? 'Hide the whole dock, rail included'
+              : 'Show the dock'}
             onClick={() => toggleDock('right')}
           >
             {shellLayout.rightColumnOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
@@ -3045,6 +3099,7 @@ export default function MainStudio() {
           columnOpen={shellLayout.rightColumnOpen}
           changesBadge={dockUncommitted}
           scopes={rightDockScopes}
+          chips={rightDockChips}
           onSelectPage={selectRightPage}
           onRefresh={refreshRightDockPage}
           pages={rightDockPages}
