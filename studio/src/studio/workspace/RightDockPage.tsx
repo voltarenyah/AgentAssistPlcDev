@@ -6,6 +6,8 @@ type Props = {
   title: string
   /** What the page describes right now — the selected worktree, or the worktree and its object. */
   scope?: string | null
+  /** A short piece of page state worth seeing without opening anything, such as the uncommitted count. */
+  chip?: string | null
   onRefresh?: () => void
   /** Collapses the page to the rail; the same gesture as the rail's active item. */
   onCollapse: () => void
@@ -19,7 +21,7 @@ type Props = {
  * rest. The header is what the four page-owned dock headers used to be, so the pages below it carry
  * content only (ADR-0015).
  */
-export default function RightDockPage({ title, scope, onRefresh, onCollapse, hidden, children }: Props) {
+export default function RightDockPage({ title, scope, chip = null, onRefresh, onCollapse, hidden, children }: Props) {
   return (
     <div
       hidden={hidden}
@@ -37,6 +39,11 @@ export default function RightDockPage({ title, scope, onRefresh, onCollapse, hid
             <span className="truncate font-mono">{scope}</span>
           </span>
         )}
+        {chip && (
+          <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500" data-testid="right-dock-page-chip">
+            {chip}
+          </span>
+        )}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {onRefresh && (
             <button
@@ -52,8 +59,8 @@ export default function RightDockPage({ title, scope, onRefresh, onCollapse, hid
           <button
             type="button"
             className="icon-button h-6 w-6"
-            aria-label={`Collapse ${title}`}
-            title={`Collapse ${title}`}
+            aria-label={`Collapse ${title} to the rail`}
+            title="Collapse to the rail — the rail stays"
             onClick={onCollapse}
           >
             <PanelRightClose className="h-3 w-3" />

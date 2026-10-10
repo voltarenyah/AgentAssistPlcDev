@@ -1,3 +1,4 @@
+import { PanelRightOpen } from 'lucide-react'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -7,6 +8,8 @@ import { RIGHT_DOCK_PAGE_ICONS, RIGHT_DOCK_PAGE_LABELS } from './rightDockPageMe
 type Props = {
   /** The page the rail has open, or null while the page is collapsed to the rail. */
   openPage: RightDockPage | null
+  /** The page the rail keeps marked while the page is collapsed, so the next click restores it. */
+  markedPage: RightDockPage
   /** The selected worktree's uncommitted object count, or null when there is nothing to badge. */
   changesBadge?: number | null
   /** Opens the clicked page, or collapses it when it is already the open one. */
@@ -18,64 +21,91 @@ type Props = {
  * tablist so `↑`/`↓` and `aria-selected` come from the primitive. Clicking the open page's own item
  * collapses the page; the click handler therefore owns the gesture and the value change only covers
  * moving between pages (ADR-0015).
+ *
+ * A collapsed page leaves the rail alone in the column, and a folded page with no visible way back
+ * reads as a broken page rather than a folded one. The rail therefore grows a labelled expand handle
+ * at its foot while the page is collapsed: the marked item keeps its active pill, and the handle is
+ * the affordance that is visible without hovering.
  */
-export default function RightDockRail({ openPage, changesBadge = null, onSelectPage }: Props) {
+export default function RightDockRail({ openPage, markedPage, changesBadge = null, onSelectPage }: Props) {
+  const collapsed = openPage === null
+  const markedLabel = RIGHT_DOCK_PAGE_LABELS[markedPage]
   return (
     <TooltipProvider>
-      <TabsList
-        variant="line"
-        aria-label="Right dock pages"
+      <div
         data-dock-content="right-rail"
-        className="h-full w-11 flex-none flex-col items-center gap-1 rounded-none border-l bg-sidebar p-0 pt-2"
+        className="flex h-full w-11 flex-none flex-col items-center gap-1 border-l bg-sidebar py-2"
         style={{ borderColor: 'var(--border)' }}
       >
-        {RIGHT_DOCK_PAGES.map(page => {
-          const Icon = RIGHT_DOCK_PAGE_ICONS[page]
-          const label = RIGHT_DOCK_PAGE_LABELS[page]
-          const open = openPage === page
-          const badge = page === 'changes' ? changesBadge : null
-          return (
-            <Tooltip key={page}>
-              <TooltipTrigger asChild>
-                <TabsTrigger
-                  value={page}
-                  aria-label={label}
-                  data-testid={`right-dock-rail-${page}`}
-                  data-open={open}
-                  onClick={() => onSelectPage(page)}
-                  className={cn(
-                    'relative h-[30px] w-[30px] flex-none rounded-md border-0 p-0',
-                    // The `Tabs` primitive ships a vertical-tab skin —
-                    // `group-data-[orientation=vertical]/tabs:w-full` and `…:justify-start` — for
-                    // labelled vertical tabs, and those selectors beat a plain `w-[30px]` /
-                    // `justify-center`. A rail item must override the same variant, or the button
-                    // stretches across the whole rail and its icon sits flush against the inner edge.
-                    'group-data-[orientation=vertical]/tabs:w-[30px]',
-                    'group-data-[orientation=vertical]/tabs:justify-center',
-                    'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-                    'data-[state=active]:bg-accent data-[state=active]:text-foreground',
-                    'dark:data-[state=active]:bg-accent dark:data-[state=active]:text-foreground',
-                    'group-data-[variant=line]/tabs-list:data-[state=active]:bg-accent',
-                    'dark:group-data-[variant=line]/tabs-list:data-[state=active]:bg-accent',
-                    'after:hidden',
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                  {badge !== null && badge > 0 && (
-                    <span
-                      data-testid="right-dock-rail-changes-badge"
-                      className="absolute -right-0.5 -bottom-0.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-chart-3 px-1 font-mono text-[9px] font-semibold text-white ring-2 ring-sidebar"
-                    >
-                      {badge > 99 ? '99+' : badge}
-                    </span>
-                  )}
-                </TabsTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="left">{open ? `Hide ${label}` : label}</TooltipContent>
-            </Tooltip>
-          )
-        })}
-      </TabsList>
+        <TabsList
+          variant="line"
+          aria-label="Right dock pages"
+          className="h-auto w-full flex-none flex-col items-center gap-1 rounded-none bg-transparent p-0"
+        >
+          {RIGHT_DOCK_PAGES.map(page => {
+            const Icon = RIGHT_DOCK_PAGE_ICONS[page]
+            const label = RIGHT_DOCK_PAGE_LABELS[page]
+            const open = openPage === page
+            const badge = page === 'changes' ? changesBadge : null
+            return (
+              <Tooltip key={page}>
+                <TooltipTrigger asChild>
+                  <TabsTrigger
+                    value={page}
+                    aria-label={label}
+                    data-testid={`right-dock-rail-${page}`}
+                    data-open={open}
+                    onClick={() => onSelectPage(page)}
+                    className={cn(
+                      'relative h-[30px] w-[30px] flex-none rounded-md border-0 p-0',
+                      // The `Tabs` primitive ships a vertical-tab skin —
+                      // `group-data-[orientation=vertical]/tabs:w-full` and `…:justify-start` — for
+                      // labelled vertical tabs, and those selectors beat a plain `w-[30px]` /
+                      // `justify-center`. A rail item must override the same variant, or the button
+                      // stretches across the whole rail and its icon sits flush against the inner edge.
+                      'group-data-[orientation=vertical]/tabs:w-[30px]',
+                      'group-data-[orientation=vertical]/tabs:justify-center',
+                      'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+                      'data-[state=active]:bg-accent data-[state=active]:text-foreground',
+                      'dark:data-[state=active]:bg-accent dark:data-[state=active]:text-foreground',
+                      'group-data-[variant=line]/tabs-list:data-[state=active]:bg-accent',
+                      'dark:group-data-[variant=line]/tabs-list:data-[state=active]:bg-accent',
+                      'after:hidden',
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {badge !== null && badge > 0 && (
+                      <span
+                        data-testid="right-dock-rail-changes-badge"
+                        className="absolute -right-0.5 -bottom-0.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-chart-3 px-1 font-mono text-[9px] font-semibold text-white ring-2 ring-sidebar"
+                      >
+                        {badge > 99 ? '99+' : badge}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="left">{open ? `Collapse ${label} to the rail` : label}</TooltipContent>
+              </Tooltip>
+            )
+          })}
+        </TabsList>
+        {collapsed && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-testid="right-dock-rail-expand"
+                aria-label={`Expand ${markedLabel}`}
+                onClick={() => onSelectPage(markedPage)}
+                className="mt-auto grid h-[30px] w-[30px] flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+              >
+                <PanelRightOpen className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">{`Expand ${markedLabel} — the rail stays`}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
     </TooltipProvider>
   )
 }

@@ -18,6 +18,8 @@ type Props = {
   changesBadge?: number | null
   /** The one-line scope each page's header shows. */
   scopes?: Partial<Record<RightDockPage, string | null>>
+  /** A short piece of page state each page's header shows, such as the uncommitted count. */
+  chips?: Partial<Record<RightDockPage, string | null>>
   onSelectPage: (page: RightDockPage) => void
   onRefresh?: (page: RightDockPage) => void
   pages: Record<RightDockPage, ReactNode>
@@ -39,6 +41,7 @@ export default function RightDock({
   columnOpen = true,
   changesBadge = null,
   scopes = {},
+  chips = {},
   onSelectPage,
   onRefresh,
   pages,
@@ -76,6 +79,12 @@ export default function RightDock({
             key={candidate}
             value={candidate}
             forceMount
+            // `forceMount` keeps every page mounted — which is what stops a switch from remounting the
+            // version-control surface — but it also leaves every wrapper in the layout. Three 266 px
+            // boxes in a 266 px track packed to its right edge put the *open* page outside the clip
+            // unless it happens to be the last one, so the wrapper is hidden explicitly. Measured in
+            // the running app before this: the open Properties page sat at x=438 in a track at x=970.
+            hidden={page !== candidate}
             data-testid={`right-dock-page-${candidate}`}
             className="m-0 h-full min-h-0 flex-none outline-none"
             style={{ width: pageWidth }}
@@ -83,6 +92,7 @@ export default function RightDock({
             <RightDockPageFrame
               title={RIGHT_DOCK_PAGE_LABELS[candidate]}
               scope={scopes[candidate] ?? null}
+              chip={chips[candidate] ?? null}
               onRefresh={onRefresh ? () => onRefresh(candidate) : undefined}
               onCollapse={() => onSelectPage(candidate)}
               hidden={page !== candidate}
@@ -94,6 +104,7 @@ export default function RightDock({
       </div>
       <RightDockRail
         openPage={page}
+        markedPage={markedPage}
         changesBadge={changesBadge}
         onSelectPage={onSelectPage}
       />

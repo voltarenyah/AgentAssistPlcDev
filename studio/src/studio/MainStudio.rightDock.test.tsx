@@ -75,6 +75,24 @@ vi.mock('@/api/client', async importOriginal => {
     getKeyStatus: vi.fn(async () => ({ configured: true })),
     getDeepSeekBalance: vi.fn(async () => ({ isAvailable: true, balances: [], fetchedAt: '2026-08-02T00:00:00.000Z' })),
     getSessions: vi.fn(async () => []),
+    // The rail's badge is the shell's own read of the worktree's status, so it has to be answered even
+    // when the changes page has never been opened.
+    getWorktreeVcStatus: vi.fn(async () => ({ branch: 'master', entries: [] })),
+    getHardwareConfiguration: vi.fn(async () => ({
+      state: 'ok',
+      projectAmlPath: 'C:/wb/hardware/project.aml',
+      exportedAt: '2026-10-07T10:39:45Z',
+      devices: [{
+        id: 'd1',
+        name: 'S7-1500/ET200MP station_1',
+        kind: 'Device',
+        typeIdentifier: null,
+        properties: [],
+        ioRanges: [],
+      }],
+      tags: [],
+    })),
+    getHardwareBom: vi.fn(async () => ({ state: 'ok', exportedAt: '2026-10-07T10:39:45Z', items: [] })),
   }
 })
 
@@ -245,5 +263,80 @@ describe('MainStudio right dock is never opened by an action', () => {
 
     await act(async () => { railItem(host, 'history')!.click() })
     expect(pageState(host)).toBe('open')
+  })
+
+  it('offers a labelled expand handle while the page is collapsed', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    await clickText(host, 'DemoWB')
+    await clickText(host, 'master')
+    await act(async () => {})
+    expect(host.querySelector('[data-testid="right-dock-rail-expand"]')).toBeNull()
+
+    // Collapsing the page leaves the rail alone in the column; the handle is the visible way back.
+    await act(async () => { railItem(host, 'changes')!.click() })
+    expect(pageState(host)).toBe('collapsed')
+    const expand = host.querySelector<HTMLButtonElement>('[data-testid="right-dock-rail-expand"]')
+    expect(expand).not.toBeNull()
+    expect(expand?.getAttribute('aria-label')).toBe('Expand Changes')
+
+    await act(async () => { expand!.click() })
+    expect(pageState(host)).toBe('open')
+    expect(host.querySelector('[data-testid="right-dock-rail-expand"]')).toBeNull()
+  })
+
+  it('badges the rail and the page header from its own status read, before any page is opened', async () => {
+    vi.mocked(api.getWorktreeVcStatus).mockResolvedValueOnce({
+      branch: 'master',
+      entries: [
+        { filePath: 'devices/PLC_1/source/Blocks/Main.xml', state: 'Modified' },
+        { filePath: 'devices/PLC_1/source/DB/Data.xml', state: 'Modified' },
+        { filePath: 'hardware/staging/project.aml', state: 'Modified' },
+      ],
+    } as api.VcStatusResult)
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    await clickText(host, 'DemoWB')
+    await clickText(host, 'master')
+    await act(async () => {})
+
+    // Two source objects: the staging path is not one, and the changes page has never been opened.
+    expect(host.querySelector('[data-testid="right-dock-rail-changes-badge"]')?.textContent).toBe('2')
+    expect(host.querySelector('[data-testid="right-dock-page-chip"]')?.textContent).toBe('2 uncommitted')
+  })
+
+  it('shows no badge on a clean worktree', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    await clickText(host, 'DemoWB')
+    await clickText(host, 'master')
+    await act(async () => {})
+
+    expect(host.querySelector('[data-testid="right-dock-rail-changes-badge"]')).toBeNull()
+    expect(host.querySelector('[data-testid="right-dock-page-chip"]')).toBeNull()
+  })
+
+  it('describes the selected hardware node on every hardware page', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    await clickText(host, 'DemoWB')
+    await clickText(host, 'master')
+    await clickText(host, 'Hardware configuration')
+    await act(async () => {})
+
+    const propertiesPage = () => host.querySelector('[data-testid="right-dock-page-properties"]')?.textContent ?? ''
+    expect(propertiesPage()).toContain('S7-1500/ET200MP station_1')
+
+    // The BOM page shares the same node selection, so the properties page keeps describing it instead
+    // of falling back to a hint that contradicts what the workspace shows.
+    const bomTab = Array.from(host.querySelectorAll<HTMLElement>('button')).find(button => button.textContent?.trim() === 'BOM list')
+    expect(bomTab, 'BOM list tab').toBeDefined()
+    await act(async () => { bomTab!.click() })
+    await act(async () => {})
+
+    expect(propertiesPage()).toContain('S7-1500/ET200MP station_1')
+    expect(propertiesPage()).not.toContain('Select a device, a hardware object, or a knowledge node')
   })
 })

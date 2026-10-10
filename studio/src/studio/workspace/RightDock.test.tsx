@@ -86,8 +86,12 @@ describe('RightDock', () => {
     for (const name of ['properties', 'changes', 'history'] as const) {
       const content = host.querySelector(`[data-testid="${name}-content"]`)
       expect(content, name).not.toBeNull()
-      // A hidden page is still mounted, which is what keeps its state across a switch.
+      // A hidden page is still mounted, which is what keeps its state across a switch. The wrapper is
+      // hidden rather than left in the layout: three page boxes in one track push the open page out of
+      // the clip unless it is the last of them (see RightDock's comment).
+      const wrapper = host.querySelector<HTMLElement>(`[data-testid="right-dock-page-${name}"]`)
       expect(content?.closest('[hidden]') === null, name).toBe(name === 'history')
+      expect(wrapper?.hasAttribute('hidden'), name).toBe(name !== 'history')
     }
   })
 
@@ -123,8 +127,31 @@ describe('RightDock', () => {
   it('collapses the page from its header control', async () => {
     const { host, onSelectPage } = await setup()
 
-    await click(host.querySelector('[aria-label="Collapse Changes"]'))
+    await click(host.querySelector('[aria-label="Collapse Changes to the rail"]'))
     expect(onSelectPage).toHaveBeenLastCalledWith('changes')
+  })
+
+  it('offers a labelled expand handle only while the page is collapsed', async () => {
+    const { host, onSelectPage, root } = await setup({ page: 'changes' })
+    expect(host.querySelector('[data-testid="right-dock-rail-expand"]')).toBeNull()
+
+    await act(async () => root.render(
+      <RightDock page={null} markedPage="history" pageWidth={266} onSelectPage={onSelectPage} pages={pages} />,
+    ))
+    const expand = host.querySelector<HTMLButtonElement>('[data-testid="right-dock-rail-expand"]')
+    expect(expand?.getAttribute('aria-label')).toBe('Expand History')
+
+    // The handle opens the page the rail kept marked, not some other one.
+    await click(expand)
+    expect(onSelectPage).toHaveBeenLastCalledWith('history')
+  })
+
+  it('shows the header chip it was given, and none when there is nothing to say', async () => {
+    const withChip = await setup({ chips: { changes: '3 uncommitted' } })
+    expect(withChip.host.querySelector('[data-testid="right-dock-page-chip"]')?.textContent).toBe('3 uncommitted')
+
+    const without = await setup({ chips: { changes: null } })
+    expect(without.host.querySelector('[data-testid="right-dock-page-chip"]')).toBeNull()
   })
 
   it('offers the open page refresh and keeps the page it was asked for', async () => {

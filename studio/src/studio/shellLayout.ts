@@ -29,6 +29,13 @@ export const RIGHT_DOCK_RAIL_WIDTH = 44
 
 const MIN_DOCK_WIDTH = 240
 const MAX_DOCK_WIDTH = 420
+/**
+ * The right column's page holds the version-control toolbar (Compare, the scope toggle, verify), which
+ * needs about 264 px before its own padding; below that the row wraps and the page reads as broken.
+ * The floor is therefore the default page width itself, which also keeps a migrated v1 layout exactly
+ * as wide as the column it replaced (310 px total). The rail adds its fixed 44 px on top.
+ */
+const MIN_RIGHT_PANEL_WIDTH = 266
 
 export const DEFAULT_SHELL_LAYOUT: ShellLayout = {
   version: 2,
@@ -41,8 +48,10 @@ export const DEFAULT_SHELL_LAYOUT: ShellLayout = {
   rightPanelCollapsed: false,
 }
 
-export const clampDockWidth = (_side: DockSide, value: number) =>
-  Math.round(Math.max(MIN_DOCK_WIDTH, Math.min(MAX_DOCK_WIDTH, value)))
+export const clampDockWidth = (side: DockSide, value: number) => {
+  const minimum = side === 'right' ? MIN_RIGHT_PANEL_WIDTH : MIN_DOCK_WIDTH
+  return Math.round(Math.max(minimum, Math.min(MAX_DOCK_WIDTH, value)))
+}
 
 const isRightPage = (value: unknown): value is RightDockPage =>
   (RIGHT_DOCK_PAGES as readonly string[]).includes(value as string)

@@ -117,8 +117,7 @@ describe('VersionControlPanel (right dock page content)', () => {
 
   it('reads only the data the history half shows', async () => {
     const { status, log, timeline, savepoints, activeTask } = mockVcState()
-    const onCount = vi.fn()
-    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" onUncommittedCountChange={onCount} />)
+    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" />)
 
     expect(log).toHaveBeenCalledTimes(1)
     expect(timeline).toHaveBeenCalledTimes(1)
@@ -126,8 +125,6 @@ describe('VersionControlPanel (right dock page content)', () => {
     expect(status).not.toHaveBeenCalled()
     // The task scope decides a comparison, which the history half never runs.
     expect(activeTask).not.toHaveBeenCalled()
-    // The rail badge belongs to the changes half; the history instance never clears it.
-    expect(onCount).not.toHaveBeenCalled()
   })
 
   it('reads the worktree status and the timeline markers the changes half shows', async () => {
@@ -665,24 +662,20 @@ describe('VersionControlPanel (right dock page content)', () => {
     expect(timeline).toHaveBeenCalledTimes(2)
   })
 
-  it('reports the visible uncommitted object count, and zero when the branch is clean', async () => {
+  it('renders only the source objects of the uncommitted set, not every status path', async () => {
+    // The count the rail badges is derived from this same mapping (see sourceEntries.test.ts); what the
+    // panel owns is that the page lists exactly those entries and nothing else.
     mockVcState({
       entries: [
         vcEntry('devices/PLC_1/source/Blocks/Main.xml'),
         vcEntry('devices/PLC_1/source/Blocks/FB_Speed.xml'),
-        // Not a source object, so it is not part of the count the rail badges.
         vcEntry('README.md'),
       ],
     })
-    const onCount = vi.fn()
-    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" onUncommittedCountChange={onCount} />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
-    expect(onCount).toHaveBeenLastCalledWith(2)
-
-    mockVcState()
-    const onCleanCount = vi.fn()
-    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" onUncommittedCountChange={onCleanCount} />)
-
-    expect(onCleanCount).toHaveBeenLastCalledWith(0)
+    expect(host.querySelectorAll('[data-testid="plc-source-row"]')).toHaveLength(2)
+    expect(host.textContent).toContain('Main')
+    expect(host.textContent).not.toContain('README')
   })
 })
