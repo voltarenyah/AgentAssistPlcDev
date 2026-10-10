@@ -10,11 +10,12 @@ using Xunit;
 namespace ApiHost.Tests;
 
 /// <summary>
-/// A device's conversation list is the worktree's sessions filtered to the device that owns them. A
-/// worktree keeps every conversation in one directory, so the per-device route has to do that
-/// filtering: without it every device received the whole worktree's list, and a surface that fans out
-/// over the worktree's devices — the navigator's `SESSIONS` section — showed each conversation once per
-/// device.
+/// A device's conversation list is the worktree's sessions filtered to the device that owns them, and
+/// the worktree's own list is the whole directory. A worktree keeps every conversation in one place, so
+/// the per-device route has to do that filtering: without it every device received the whole worktree's
+/// list, and a surface that fans out over the worktree's devices — the navigator's `SESSIONS` section —
+/// showed each conversation once per device. The worktree route is the other half: it is the only list
+/// that can reach a conversation whose own header names no device, which no device route may return.
 /// </summary>
 public sealed class DeviceSessionListEndpointTests : IDisposable
 {
@@ -55,6 +56,61 @@ public sealed class DeviceSessionListEndpointTests : IDisposable
         Assert.Empty(secondList);
     }
 
+    /// <summary>
+    /// The worktree's own list is the whole session directory, so a surface that is about the
+    /// worktree's conversations rather than one device's — the worktree page's own conversation list —
+    /// reads every one of them in a single request.
+    /// </summary>
+    [Fact]
+    public async Task WorktreeSessionListReturnsEveryConversationWhicheverDeviceOwnsIt()
+    {
+        var fixture = await CreateFixtureAsync();
+        await using var factory = fixture.Factory;
+        using var client = fixture.Client;
+
+        var first = await CreateConversationAsync(client, fixture, "dev-1");
+        var second = await CreateConversationAsync(client, fixture, "dev-2");
+
+        var listed = await ListWorktreeConversationsAsync(client, fixture);
+
+        Assert.Equal(
+            new[] { first, second }.OrderBy(id => id, StringComparer.Ordinal),
+            listed.Select(item => item.GetProperty("sessionId").GetString()!).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(
+            new[] { "dev-1", "dev-2" },
+            listed.Select(item => item.GetProperty("deviceId").GetString()!).OrderBy(id => id, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A conversation whose own header names no device is still the worktree's. It belongs to no
+    /// device, so the per-device routes are right to omit it — which is exactly why the worktree route
+    /// has to list it: it is the only list that can, and a conversation no surface can reach is a
+    /// conversation the user cannot delete or read.
+    /// </summary>
+    [Fact]
+    public async Task WorktreeSessionListIncludesAConversationNoDeviceOwns()
+    {
+        var fixture = await CreateFixtureAsync();
+        await using var factory = fixture.Factory;
+        using var client = fixture.Client;
+
+        var owned = await CreateConversationAsync(client, fixture, "dev-1");
+        var orphan = await WriteConversationWithoutADeviceAsync(fixture);
+
+        var listed = await ListWorktreeConversationsAsync(client, fixture);
+
+        Assert.Equal(
+            new[] { orphan, owned }.OrderBy(id => id, StringComparer.Ordinal),
+            listed.Select(item => item.GetProperty("sessionId").GetString()!).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(
+            JsonValueKind.Null,
+            listed.Single(item => item.GetProperty("sessionId").GetString() == orphan).GetProperty("deviceId").ValueKind);
+        // The per-device lists stay what they were: this conversation is not any device's.
+        Assert.Empty(await ListConversationsAsync(client, fixture, "dev-2"));
+        Assert.Equal(owned, Assert.Single(await ListConversationsAsync(client, fixture, "dev-1"))
+            .GetProperty("sessionId").GetString());
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(root, recursive: true); } catch { /* best-effort cleanup */ }
@@ -89,7 +145,7 @@ public sealed class DeviceSessionListEndpointTests : IDisposable
             });
         });
         return await Task.FromResult(new SessionListFixture(
-            factory, factory.CreateClient(), workbench.WorkbenchId, worktreeId));
+            factory, factory.CreateClient(), workbench.WorkbenchId, worktreeId, worktreeRoot));
     }
 
     private static async Task<string> CreateConversationAsync(
@@ -105,6 +161,38 @@ public sealed class DeviceSessionListEndpointTests : IDisposable
         return created.GetProperty("header").GetProperty("sessionId").GetString()!;
     }
 
+    /// <summary>
+    /// Writes the one shape no route creates any more: a conversation file whose header names no
+    /// device, which is what a worktree written before conversations carried a device holds. It is
+    /// written as the file itself, because the only writer goes through a device that the header would
+    /// then have to match.
+    /// </summary>
+    private static async Task<string> WriteConversationWithoutADeviceAsync(SessionListFixture fixture)
+    {
+        const string sessionId = "orphan-session";
+        var directory = Path.Combine(fixture.WorktreeRoot, ".automation", "sessions");
+        Directory.CreateDirectory(directory);
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, sessionId + ".json"),
+            $$"""
+            {
+              "header": {
+                "sessionId": "{{sessionId}}",
+                "workbenchId": "{{fixture.WorkbenchId}}",
+                "worktreeId": "{{fixture.WorktreeId}}",
+                "worktreeRoot": {{JsonSerializer.Serialize(fixture.WorktreeRoot)}},
+                "knowledgeDbPath": {{JsonSerializer.Serialize(Path.Combine(fixture.WorktreeRoot, "knowledge.db"))}},
+                "createdAt": "{{now}}",
+                "updatedAt": "{{now}}",
+                "title": "Orphan conversation"
+              },
+              "messages": []
+            }
+            """);
+        return sessionId;
+    }
+
     private static async Task<JsonElement[]> ListConversationsAsync(
         HttpClient client,
         SessionListFixture fixture,
@@ -112,6 +200,15 @@ public sealed class DeviceSessionListEndpointTests : IDisposable
     {
         var listed = await client.GetFromJsonAsync<JsonElement>(
             $"/api/workbenches/{fixture.WorkbenchId}/worktrees/{fixture.WorktreeId}/devices/{deviceId}/sessions");
+        return listed.EnumerateArray().ToArray();
+    }
+
+    private static async Task<JsonElement[]> ListWorktreeConversationsAsync(
+        HttpClient client,
+        SessionListFixture fixture)
+    {
+        var listed = await client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.WorkbenchId}/worktrees/{fixture.WorktreeId}/sessions");
         return listed.EnumerateArray().ToArray();
     }
 
@@ -129,5 +226,6 @@ public sealed class DeviceSessionListEndpointTests : IDisposable
         WebApplicationFactory<Program> Factory,
         HttpClient Client,
         string WorkbenchId,
-        string WorktreeId);
+        string WorktreeId,
+        string WorktreeRoot);
 }

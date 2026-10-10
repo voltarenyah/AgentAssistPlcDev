@@ -184,8 +184,10 @@ it('opens a navigator conversation without dropping the selected device or its t
   await clickText('master')
   await clickText('PLC_Demo')
 
-  // The only conversation is bound to the task, so with no task selected there is no list to show.
-  expect(sections()).not.toContain('sessions')
+  // The device's whole list is what the section shows while no task is selected, so it is present even
+  // though every conversation belongs to a task — the bound one is listed under the task that owns it.
+  expect(sections()).toContain('sessions')
+  expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
 
   const taskRow = host.querySelector<HTMLButtonElement>('button[aria-label="Open task Inspect startup sequence"]')
   expect(taskRow).not.toBeNull()

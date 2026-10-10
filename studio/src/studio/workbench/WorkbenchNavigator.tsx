@@ -1,6 +1,5 @@
 import {
   Archive,
-  Check,
   ChevronDown,
   ChevronRight,
   CircleDot,
@@ -31,6 +30,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ChatSessionInfo, DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
 import { sessionTaskIds, taskTargetKind } from '@/api/client'
+import { conversationTitle, useSessionOperations } from './SessionOperations'
 import { formatRelativeTime } from './TaskSessionsDisclosure'
 import {
   ContextMenu,
@@ -41,7 +41,6 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Button } from '@/components/ui/button'
-import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -76,8 +75,8 @@ type Props = {
   tasksByWorktree?: Record<string, EngineeringTask[]>
   /**
    * The selected worktree's conversations, fanned out over its devices. The `SESSIONS` section lists
-   * the selected task's, or — while no task is selected — the selected device's conversations that no
-   * task owns, which is the state selecting that device puts the section in.
+   * the selected task's, or — while no task is selected — every one the selected device owns, grouped
+   * by the task that owns each and with the conversations no task owns first.
    */
   sessionsByWorktree?: Record<string, ChatSessionInfo[]>
   activeTaskId?: string | null
@@ -172,9 +171,31 @@ const knowledgeDotClass = (state: 'current' | 'stale' | 'missing' | 'failed') =>
     : state === 'stale' ? 'text-amber-500'
       : state === 'failed' ? 'text-red-500'
         : 'text-muted-foreground'
-/** The title a conversation shows, falling back the way its task surface already does. */
-const conversationTitle = (session: ChatSessionInfo) =>
-  session.title?.trim() || session.firstUserMessage?.trim() || 'Untitled conversation'
+
+/** Every section the navigator can show, in the order the cascade puts them in. */
+const navigatorSectionIds = ['projects', 'worktree', 'device', 'tasks', 'sessions']
+/**
+ * The scope a selection names. It is what the cascade is built from, and it decides which sections the
+ * accordion below leaves open.
+ */
+type NavigatorScope = 'project' | 'worktree' | 'device' | 'target'
+/**
+ * The sections a scope selection leaves open. Picking a scope folds the section it was picked from and
+ * opens the one below it, so the levels already chosen stop competing for height with the ones being
+ * worked in — which is what gives the sections at the bottom, and the conversation list among them,
+ * the room to be read. `TASKS` and `SESSIONS` are the pair that stays open together: a device is
+ * selected both to work on its tasks and to read its conversations, and folding either would hide what
+ * the other is about.
+ */
+const accordionDefaults: Record<NavigatorScope, string[]> = {
+  project: ['projects'],
+  worktree: ['worktree'],
+  device: ['device'],
+  target: ['tasks', 'sessions'],
+}
+/** Every section a scope's selection folds: all of them but the ones it leaves open. */
+const foldedSectionsByScope = (scope: NavigatorScope) =>
+  new Set(navigatorSectionIds.filter(id => !accordionDefaults[scope].includes(id)))
 
 type NavigatorSectionProps = {
   /** Stable section identity, used for the header/body pairing and for test and style hooks. */
@@ -191,6 +212,10 @@ type NavigatorSectionProps = {
    * follows its content.
    */
   fillsRemainingSpace?: boolean
+  /** Whether the section is folded. The navigator owns this, because scope selection moves it. */
+  collapsed: boolean
+  /** The header was activated: fold the section, or open it again. */
+  onToggle: () => void
   children: ReactNode
 }
 
@@ -204,7 +229,9 @@ const SECTION_MIN_HEIGHT = 72
  * One collapsible navigator section.
  *
  * The header is a native button that owns this section's collapse state, so activating one header
- * changes only that section. The header sits outside the body's scroll region, so a scrolling
+ * changes only that section. The state itself lives in the navigator rather than here, because a scope
+ * selection also moves it: the accordion folds the level the user just picked from. The header sits
+ * outside the body's scroll region, so a scrolling
  * section can never carry a header out of view.
  *
  * The box is `flex: 0 1 auto`, so its height follows its content instead of taking an equal share of
@@ -213,8 +240,7 @@ const SECTION_MIN_HEIGHT = 72
  * what the box measures; when the dock cannot give it that much, the box shrinks to its floor and the
  * body scrolls.
  */
-function NavigatorSection({ id, title, action, height = null, fillsRemainingSpace = false, children }: NavigatorSectionProps) {
-  const [collapsed, setCollapsed] = useState(false)
+function NavigatorSection({ id, title, action, height = null, fillsRemainingSpace = false, collapsed, onToggle, children }: NavigatorSectionProps) {
   const bodyId = `navigator-section-${id}`
   // A collapsed section releases its height even when it is the deepest one: folding it is a request
   // for less room, not for a header on top of an empty box.
@@ -233,7 +259,7 @@ function NavigatorSection({ id, title, action, height = null, fillsRemainingSpac
           type="button"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
-          onClick={() => setCollapsed(current => !current)}
+          onClick={onToggle}
           className="flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left text-[9px] font-semibold tracking-[0.18em] text-muted-foreground transition-colors hover:text-foreground"
         >
           {collapsed
@@ -563,11 +589,31 @@ export default function WorkbenchNavigator({
   )
   const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
   /**
+   * The scope the selection names, which is what the accordion's defaults are read from. A worktree
+   * whose own row is the deepest selection names no target yet, so its `DEVICE` list is what the user
+   * is about to pick from; the hardware row is a target like a device.
+   */
+  const selectionScope: NavigatorScope =
+    !selection.workbenchId ? 'project'
+      : !selection.worktreeId ? 'worktree'
+        : selection.deviceId || selection.targetKind === 'hardware' ? 'target'
+          : 'device'
+  /**
+   * Which sections are folded. A scope selection folds the section it was picked from and opens the
+   * one below it, so the levels already chosen stop taking height from the ones being worked in; a
+   * header click overrides that until the next scope selection. This is what keeps the bottom of the
+   * dock — the conversation list, once a device is selected — readable rather than a sliver.
+   */
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    () => foldedSectionsByScope(selectionScope),
+  )
+  /**
    * Which target the remembered task was picked under. Selecting a device, the hardware row, a worktree
    * or a workbench is the navigator's "no task in particular" state, so the task selection is dropped:
    * the `SESSIONS` section then falls back to the selected device's conversations that no task owns,
    * which is the only way back to one. Without that reset the selection was sticky — it had no way out
    * at all — and a task that owns no conversation took the whole section off screen with it (AC-015).
+   * The same event is what re-applies the accordion's defaults, so both are keyed on one identity.
    */
   const selectionKey = `${selection.workbenchId ?? ''}:${selection.worktreeId ?? ''}:${selection.deviceId ?? selection.targetKind ?? ''}`
   const lastSelectionKey = useRef(selectionKey)
@@ -575,7 +621,15 @@ export default function WorkbenchNavigator({
     if (lastSelectionKey.current === selectionKey) return
     lastSelectionKey.current = selectionKey
     setClickedTaskId(null)
-  }, [selectionKey])
+    setCollapsedSections(foldedSectionsByScope(selectionScope))
+  }, [selectionKey, selectionScope])
+  /** The user's own fold or unfold of one section, which lasts until the scope selection moves again. */
+  const toggleSection = (id: string) => setCollapsedSections(current => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
   /**
    * A task detail opened from the worktree's own task surface is adopted as the navigator's selection,
    * so the highlighted row and the `SESSIONS` section follow the detail that is open. Adopting it also
@@ -590,17 +644,6 @@ export default function WorkbenchNavigator({
   const [sectionHeights, setSectionHeights] = useState<Record<string, number>>({})
   const [renameTask, setRenameTask] = useState<{ workbench: Workbench; worktree: WorkbenchRegistration; task: EngineeringTask } | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
-  const [renameSession, setRenameSession] = useState<ChatSessionInfo | null>(null)
-  const [renameSessionTitle, setRenameSessionTitle] = useState('')
-  /** The conversation whose task relations the picker below is choosing, or null while it is closed. */
-  const [bindTaskSession, setBindTaskSession] = useState<ChatSessionInfo | null>(null)
-  const [bindTaskQuery, setBindTaskQuery] = useState('')
-  /**
-   * The checks the picker is showing, in the order they were set. It starts as the conversation's
-   * current relations and is written as a whole set when the picker is applied, so the conversation is
-   * never left half-linked (AC-019).
-   */
-  const [bindTaskSelection, setBindTaskSelection] = useState<string[]>([])
   const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
   const matchingWorktrees = new Map(
     (filteredResults?.worktrees ?? []).map(result => [result.entityId, result]),
@@ -628,28 +671,6 @@ export default function WorkbenchNavigator({
     if (!renameTask || !renameTitle.trim()) return
     onUpdateTask(renameTask.workbench, renameTask.worktree, renameTask.task, { title: renameTitle.trim() })
     setRenameTask(null)
-  }
-  const openRenameSession = (session: ChatSessionInfo) => {
-    setRenameSessionTitle(conversationTitle(session))
-    setRenameSession(session)
-  }
-  const saveSessionRename = () => {
-    if (!renameSession || !renameSessionTitle.trim()) return
-    onRenameSession(renameSession, renameSessionTitle.trim())
-    setRenameSession(null)
-  }
-  /**
-   * Deleting a related conversation also removes the graph edges that record which tasks it belonged
-   * to, so say what it costs. A conversation no task is related to has no such links to lose, and one
-   * several tasks share loses all of them (AC-017).
-   */
-  const confirmDeleteSession = (session: ChatSessionInfo) => {
-    const named = conversationTitle(session)
-    const cost = sessionTaskIds(session).length === 0
-      ? ' A deleted conversation cannot be recovered.'
-      : ' Its links to the tasks it is related to are lost, and a deleted conversation cannot be recovered.'
-    if (!window.confirm(`Delete "${named}"?${cost}`)) return
-    onDeleteSession(session)
   }
 
   // The cascade's tail: which target below the selected worktree is showing, and what it owns.
@@ -688,65 +709,76 @@ export default function WorkbenchNavigator({
    */
   const selectedTaskId = clickedTaskId ?? activeTaskId
   /**
-   * The task the `TASKS` section shows as selected — the same expression that marks its row — and the
-   * conversations the `SESSIONS` section is about: that task's while one is selected, and otherwise the
-   * selected device's conversations that no task owns (AC-015). One list at a time, so the section can
-   * never show a task the user is not working in. Membership is set membership (ADR-0014): a
-   * conversation related to several tasks is listed by each of them, and the task-less list is the
-   * conversation with no relation at all.
+   * The task the `TASKS` section shows as selected — the same expression that marks its row — and,
+   * while one is selected, the one list `SESSIONS` is about (AC-015). Membership is set membership
+   * (ADR-0014): a conversation related to several tasks is listed by each of them, and the task-less
+   * group is the conversation with no relation at all.
    */
   const selectedWorktreeTask = targetTasks.find(task => task.taskId === selectedTaskId) ?? null
-  const sessionsSectionVisible = !filterActive && selectedTargetKind !== 'hardware'
-  const selectedSessions = selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : []
-  const sessionRows = !sessionsSectionVisible
+  /**
+   * The section exists exactly while a PLC device is the selected target: the hardware target cannot
+   * own a conversation at all, and a worktree or a project on its own names no device to scope one to.
+   */
+  const sessionsSectionVisible = !filterActive && selectedTargetKind === 'device'
+  /**
+   * Every conversation the selected device owns, whichever task it is related to. This section is the
+   * only surface that lists a device's conversations (ADR-0009), so it reads the device's whole list
+   * and groups it below rather than leaving the conversations of tasks the user has not opened out of
+   * reach. The worktree's conversations are fanned out over its devices when it is selected, so the
+   * device is what selects from a list that is already the worktree's.
+   */
+  const deviceSessions = selection.deviceId
+    ? (selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : [])
+      .filter(session => session.deviceId === selection.deviceId)
+    : []
+  /** The conversations of one task: membership is set membership, so a shared one is listed by each. */
+  const sessionsOfTask = (taskId: string) =>
+    deviceSessions.filter(session => sessionTaskIds(session).includes(taskId))
+  /**
+   * The groups the section shows, in order. A selected task is the whole list, which is the rule the
+   * section was built on. A selected device with no task selected is the device's entire list: the
+   * conversations no task is related to first, under `No task`, then one group per task that owns one.
+   * The owning tasks are the selected device's own — the order `TASKS` lists them in — followed by any
+   * other task of the worktree that owns one of them, which re-binding a conversation can produce. So
+   * every group a device's list can produce is present and no conversation it holds is unreachable.
+   */
+  const tasksOwningDeviceSessions = [
+    ...targetTasks.map(task => task.taskId),
+    ...[...new Set(deviceSessions.flatMap(session => sessionTaskIds(session)))]
+      .filter(taskId => !targetTasks.some(task => task.taskId === taskId)),
+  ]
+  const sessionGroups: { key: string; title: string; sessions: ChatSessionInfo[] }[] = !sessionsSectionVisible
     ? []
     : selectedWorktreeTask
-      ? selectedSessions.filter(session => sessionTaskIds(session).includes(selectedWorktreeTask.taskId))
-      : selection.deviceId
-        ? selectedSessions.filter(session => sessionTaskIds(session).length === 0 && session.deviceId === selection.deviceId)
-        : []
-  /** What the list is, said above it: the task that owns these conversations, or that no task does. */
-  const sessionsHeading = selectedWorktreeTask ? selectedWorktreeTask.title : 'No task'
+      ? [{
+        key: selectedWorktreeTask.taskId,
+        title: selectedWorktreeTask.title,
+        sessions: sessionsOfTask(selectedWorktreeTask.taskId),
+      }]
+      : [
+      {
+        key: 'unbound',
+        title: 'No task',
+        sessions: deviceSessions.filter(session => sessionTaskIds(session).length === 0),
+      },
+      ...tasksOwningDeviceSessions.map(taskId => ({
+        key: taskId,
+        title: selectedTasks.find(task => task.taskId === taskId)?.title ?? taskId,
+        sessions: sessionsOfTask(taskId),
+      })),
+    ].filter(group => group.sessions.length > 0)
+  const sessionRowCount = sessionGroups.reduce((total, group) => total + group.sessions.length, 0)
   /**
-   * The tasks a conversation can be related to: the worktree's own, minus the ones that cannot own a
-   * conversation at all. A session resolves through a device, so a hardware or untargeted task is
-   * never a valid relation (ADR-0009). The picker asks for a choice from that list rather than for a
-   * raw id, so binding a conversation never needs an out-of-band prompt.
+   * What a conversation row's own menu performs, held once by `useSessionOperations` so the worktree's
+   * own conversation list cannot offer a diverging copy of it: renaming the conversation, editing the
+   * set of tasks it is related to, and deleting it under ADR-0010 (AC-017, AC-019).
    */
-  const bindableTasks = selectedTasks.filter(task => task.deviceId)
-  /**
-   * Opens the picker on the conversation's current relations, so every check reflects a relation the
-   * conversation already has, an apply that changes nothing writes the same set back, and a relation
-   * the picker cannot offer — which the write path would refuse to create — is preserved instead of
-   * being dropped by a set that never showed it.
-   */
-  const openBindTaskPicker = (session: ChatSessionInfo) => {
-    setBindTaskQuery('')
-    setBindTaskSelection(sessionTaskIds(session))
-    setBindTaskSession(session)
-  }
-  /** A click sets a check; a second click on a checked task clears it (AC-019). */
-  const toggleBindTask = (taskId: string) => {
-    setBindTaskSelection(previous => previous.includes(taskId)
-      ? previous.filter(id => id !== taskId)
-      : [...previous, taskId])
-  }
-  const closeBindTaskPicker = () => {
-    setBindTaskSession(null)
-    setBindTaskSelection([])
-  }
-  /**
-   * One apply writes the whole set. The primary the conversation already had is named only while it is
-   * still checked, so unchecking it hands the primary to the set's own resolution — which is how the
-   * user moves it — and an apply that leaves it checked keeps it where it was (ADR-0014, AC-019).
-   */
-  const applyBindTasks = () => {
-    if (!bindTaskSession) return
-    const primary = bindTaskSession.taskId
-    const keepPrimary = primary && bindTaskSelection.includes(primary) ? primary : undefined
-    onSetSessionTasks(bindTaskSession, bindTaskSelection, keepPrimary)
-    closeBindTaskPicker()
-  }
+  const sessionOperations = useSessionOperations({
+    tasks: selectedTasks,
+    onRename: onRenameSession,
+    onSetTasks: onSetSessionTasks,
+    onDelete: onDeleteSession,
+  })
 
   const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
     setClickedTaskId(task.taskId)
@@ -778,7 +810,7 @@ export default function WorkbenchNavigator({
     ...(showWorktreeSection ? ['worktree'] : []),
     ...(deviceSectionVisible ? ['device'] : []),
     ...(tasksSectionVisible ? ['tasks'] : []),
-    ...(sessionRows.length > 0 ? ['sessions'] : []),
+    ...(sessionsSectionVisible ? ['sessions'] : []),
   ]
   const applySectionHeights = (upperId: string, upperHeight: number, lowerId: string, lowerHeight: number) =>
     setSectionHeights(current => ({
@@ -821,6 +853,8 @@ export default function WorkbenchNavigator({
         title="DEVICE"
         height={sectionHeights.device ?? null}
         fillsRemainingSpace={isDeepestSection('device')}
+        collapsed={collapsedSections.has('device')}
+        onToggle={() => toggleSection('device')}
         action={(
           <Button variant="ghost" size="icon-xs" aria-label="Refresh devices" title="Refresh devices" onClick={onRefresh}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -966,6 +1000,8 @@ export default function WorkbenchNavigator({
         title="TASKS"
         height={sectionHeights.tasks ?? null}
         fillsRemainingSpace={isDeepestSection('tasks')}
+        collapsed={collapsedSections.has('tasks')}
+        onToggle={() => toggleSection('tasks')}
         action={(
           <Button
             variant="ghost"
@@ -1001,19 +1037,26 @@ export default function WorkbenchNavigator({
 
   /**
    * `SESSIONS`: the conversations of the task the user has selected, or — while no task is selected —
-   * the selected device's conversations that no task owns, which is what selecting a device shows.
-   * Its header starts a conversation in the scope the list itself is showing: bound to the selected
-   * task, or the device's own and owned by no task while none is selected. The hardware target never
-   * reaches this section: it cannot own a conversation at all.
+   * every conversation of the selected device, its task-less ones first and then one group per task
+   * that owns one. Its header starts a conversation in the scope the list itself is showing: bound to
+   * the selected task, or the device's own and owned by no task while none is selected. The hardware
+   * target never reaches this section: it cannot own a conversation at all.
+   *
+   * The section is present whenever a device is the selected target, including when its list is empty:
+   * its absence would otherwise mean "this device has no conversations", "they are still loading" and
+   * "this task owns none" at once, and it is the only place the device's conversations can be started
+   * or reached from (ADR-0009).
    */
   const renderSessionsSection = () => {
-    if (!selectedWorktreeRow || sessionRows.length === 0) return null
+    if (!selectedWorktreeRow || !sessionsSectionVisible) return null
     return (
       <NavigatorSection
         id="sessions"
         title="SESSIONS"
         height={sectionHeights.sessions ?? null}
         fillsRemainingSpace={isDeepestSection('sessions')}
+        collapsed={collapsedSections.has('sessions')}
+        onToggle={() => toggleSection('sessions')}
         action={(
           <Button
             variant="ghost"
@@ -1028,23 +1071,31 @@ export default function WorkbenchNavigator({
           </Button>
         )}
       >
-        <div data-session-group={selectedWorktreeTask?.taskId ?? 'unbound'}>
-          <div className="truncate px-1 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={sessionsHeading}>
-            {sessionsHeading}
+        {sessionRowCount === 0 ? (
+          <div className="px-2 py-2 text-xs leading-4 text-muted-foreground" data-session-group="unbound" data-session-empty>
+            {selectedWorktreeTask
+              ? 'No conversations for this task yet.'
+              : 'No conversations for this device yet.'}
           </div>
-          {sessionRows.map(session => (
-            <SessionRow
-              key={session.sessionId}
-              session={session}
-              current={session.sessionId === activeSessionId}
-              onOpen={onOpenSession}
-              onRename={openRenameSession}
-              onExport={onExportSession}
-              onBindTask={openBindTaskPicker}
-              onDelete={confirmDeleteSession}
-            />
-          ))}
-        </div>
+        ) : sessionGroups.map(group => (
+          <div key={group.key} data-session-group={group.key}>
+            <div className="truncate px-1 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={group.title}>
+              {group.title}
+            </div>
+            {group.sessions.map(session => (
+              <SessionRow
+                key={session.sessionId}
+                session={session}
+                current={session.sessionId === activeSessionId}
+                onOpen={onOpenSession}
+                onRename={sessionOperations.openRename}
+                onExport={onExportSession}
+                onBindTask={sessionOperations.openBindTasks}
+                onDelete={sessionOperations.confirmDelete}
+              />
+            ))}
+          </div>
+        ))}
       </NavigatorSection>
     )
   }
@@ -1077,6 +1128,8 @@ export default function WorkbenchNavigator({
           title="PROJECTS"
           height={sectionHeights.projects ?? null}
           fillsRemainingSpace={isDeepestSection('projects')}
+          collapsed={collapsedSections.has('projects')}
+          onToggle={() => toggleSection('projects')}
           action={(
             <Button variant="ghost" size="icon-xs" aria-label="Create workbench" title="Create workbench" onClick={onCreateWorkbench}>
               <Plus className="h-3.5 w-3.5" />
@@ -1196,6 +1249,8 @@ export default function WorkbenchNavigator({
             title="WORKTREE"
             height={sectionHeights.worktree ?? null}
             fillsRemainingSpace={isDeepestSection('worktree')}
+            collapsed={collapsedSections.has('worktree')}
+            onToggle={() => toggleSection('worktree')}
             action={!filterActive && selectedWorkbench ? (
               <Button
                 variant="ghost"
@@ -1401,67 +1456,12 @@ export default function WorkbenchNavigator({
         </form>
       </DialogContent>
     </Dialog>
-    <Dialog open={renameSession !== null} onOpenChange={open => { if (!open) setRenameSession(null) }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Rename conversation</DialogTitle>
-          <DialogDescription>Choose the title this conversation shows in the navigator and on its task.</DialogDescription>
-        </DialogHeader>
-        <form className="space-y-4" onSubmit={event => { event.preventDefault(); saveSessionRename() }}>
-          <Input aria-label="Conversation title" value={renameSessionTitle} onChange={event => setRenameSessionTitle(event.target.value)} autoFocus />
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setRenameSession(null)}>Cancel</Button>
-            <Button type="submit">Save</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
     {/*
-      The conversation's task relations are chosen from this worktree's tasks, never typed in. One
-      check per task that can own a conversation: a click sets it, a second click clears it, and one
-      apply writes the whole set (ADR-0014, AC-019). The footer sits inside the dialog's cmdk root but
-      outside its list, so it takes no part in the search and stays put while the list scrolls.
+      The conversation operations the rows above offer — rename, the task-relation picker and the
+      confirmed delete — are the shared ones, so the worktree's own conversation list performs them the
+      same way this section does (ADR-0014, AC-017, AC-019).
     */}
-    <CommandDialog
-      open={bindTaskSession !== null}
-      onOpenChange={open => { if (!open) closeBindTaskPicker() }}
-      title="Conversation tasks"
-      description={bindTaskSession
-        ? `Choose the tasks “${conversationTitle(bindTaskSession)}” is related to.`
-        : 'Choose the tasks this conversation is related to.'}
-    >
-      <CommandInput
-        value={bindTaskQuery}
-        onValueChange={setBindTaskQuery}
-        placeholder="Search this worktree's tasks"
-        aria-label="Search this worktree's tasks"
-      />
-      <CommandList>
-        <CommandEmpty>No matching tasks.</CommandEmpty>
-        {bindableTasks.map(task => {
-          const checked = bindTaskSelection.includes(task.taskId)
-          return (
-            <CommandItem
-              key={task.taskId}
-              value={`${task.title} ${task.taskId}`}
-              onSelect={() => toggleBindTask(task.taskId)}
-              aria-checked={checked}
-              aria-label={`${checked ? 'Uncheck' : 'Check'} ${task.title}`}
-            >
-              <Check className={`h-3.5 w-3.5 shrink-0 ${checked ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
-              {task.title}
-            </CommandItem>
-          )
-        })}
-      </CommandList>
-      <div className="flex items-center gap-2 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-        <span className="mr-auto text-xs text-muted-foreground" role="status">
-          {bindTaskSelection.length === 0 ? 'No tasks checked' : `${bindTaskSelection.length} checked`}
-        </span>
-        <Button type="button" variant="outline" size="sm" onClick={closeBindTaskPicker}>Cancel</Button>
-        <Button type="button" size="sm" onClick={applyBindTasks}>Apply</Button>
-      </div>
-    </CommandDialog>
+    {sessionOperations.dialogs}
     </>
   )
 }

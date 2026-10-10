@@ -1981,6 +1981,19 @@ public static class WorkbenchEndpoints
                 progress => c.PushSourceObjectToTiaAsync(
                     s.Device(workbenchId, worktreeId, device).Context, comparisonId, ct, progress),
                 "Local source imported into TIA.").ConfigureAwait(false));
+        // The worktree's whole conversation list, whichever device owns each one — including a
+        // conversation whose own header names no device at all. Every other conversation list is a
+        // slice of this one, and a conversation that names no device has no other surface that can
+        // reach it. Read-only: it lists conversations, it never creates, moves or deletes one.
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/sessions", (
+            string workbenchId, string worktreeId, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var sessions = SessionManager.ListSessions(s.WorktreeRoot(workbenchId, worktreeId));
+            var relations = SessionGraphOperations.ReadRelations(
+                graphs, s.Workbench(workbenchId), sessions.Select(item => item.SessionId).ToArray(), runtime);
+            return SessionGraphOperations.ProjectSessions(sessions, relations);
+        });
         // A conversation's relation set is projected from the engineering graph, which is the
         // relation's only authority (ADR-0014): one query for the page, and a graph that cannot be
         // opened degrades to an empty set instead of hiding the conversations (AC-006, AC-007).

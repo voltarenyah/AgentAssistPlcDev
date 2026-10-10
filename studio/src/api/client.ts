@@ -1461,6 +1461,14 @@ export const dismissOperationStatus = (operationId: string) =>
 const worktreePath = (workbenchId: string, worktreeId: string) =>
   `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}`
 
+/**
+ * Every conversation the worktree holds, whichever device owns each one, and including a conversation
+ * whose own header names no device. The per-device list is a slice of this one; this is the list a
+ * surface reads when it is about the worktree's conversations rather than one device's.
+ */
+export const listWorktreeSessions = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<ChatSessionInfo[]>(`${worktreePath(workbenchId, worktreeId)}/sessions`)
+
 export const getWorkbenchOverview = (workbenchId: string) =>
   workbenchRequest<WorkbenchOverview>(`/workbenches/${encodeURIComponent(workbenchId)}/overview`)
 export const updateWorkbench = (workbenchId: string, patch: { purpose?: string | null; owner?: string | null }) =>

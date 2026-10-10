@@ -13,6 +13,13 @@ and each bound session is also a graph entity joined by a `TaskSession` edge
 (`WorktreeTasksPanel.tsx:399` filters a device's sessions by `session.taskId`, and
 `TaskSessionsDisclosure` renders them with a relative timestamp).
 
+A worktree can also accumulate more conversations than any device-scoped cascade can present: they are
+one directory, they outlive the task they were recorded against, and a worktree that is lived in has
+dozens of them. A worktree surface therefore carries its own conversation list — the `Sessions` tab of
+the worktree's tab strip — read from a worktree-level list route. That surface is not a scope in this
+cascade and does not replace the section: it is what a user browses and searches a worktree's
+conversations from, and the section stays what the currently selected scope is working in.
+
 The left navigator does not show them at all. Its cascade is the four sections ADR-0006 fixed —
 `PROJECTS`, `WORKTREE`, `DEVICE`, `TASKS` — and a task's conversations are reachable only by opening a
 task's card or detail view. The user asked for a section below `TASKS` that shows the conversations
@@ -20,10 +27,13 @@ each task is carrying.
 
 Repository evidence that constrains the choice:
 
-- **No worktree-level session list exists.** Sessions are listed per device
-  (`GET …/worktrees/{wt}/devices/{device}/sessions`, `WorkbenchApiModels.cs:1850`) and per task (the
-  task detail's `sessions`). A worktree-wide list would need a new endpoint or a fan-out over the
-  worktree's devices, which the task panel already performs (`WorktreeTasksPanel.tsx:292-301`).
+- **No worktree-level session list existed when this section was decided.** Sessions were listed per
+  device (`GET …/worktrees/{wt}/devices/{device}/sessions`, `WorkbenchApiModels.cs:1850`) and per task
+  (the task detail's `sessions`), so a worktree-wide list needed either a new endpoint or a fan-out over
+  the worktree's devices, which the task panel already performs
+  (`WorktreeTasksPanel.tsx:292-301`). The endpoint was added with the worktree surface's own
+  conversation tab: `GET …/worktrees/{wt}/sessions` reads the worktree's session directory itself, which
+  is the one list that can also reach a conversation whose header names no device.
 - **A hardware task can never own a conversation.** `createChatSessionForTask` refuses a task with no
   `deviceId` (`MainStudio.tsx:1391-1392`), because a session needs a device context to resolve.
 - **Conversations without a task are normal, not exceptional.** In the live workbench, `master` holds
@@ -86,36 +96,46 @@ is what answers it.
 ## Decision
 
 A fifth navigator section, `SESSIONS`, sits below `TASKS`. It shows the conversations of the task the
-user has selected in `TASKS`. While no task is selected, it shows the selected device's conversations
-that no task owns. Its header starts a new conversation in the scope the list itself is showing: bound
-to the selected task, or — while no task is selected — the device's own and owned by no task, which is
-exactly the list on screen then. The action is never offered for the worktree's hardware, which cannot
+user has selected in `TASKS`. While no task is selected and a PLC device is the selected target, it
+shows **every** conversation that device owns, grouped by the task each one is related to: the
+conversations no task owns first, under `No task`, then one group per task that owns one. Its header
+starts a new conversation in the scope the list itself is showing: bound to the selected task, or —
+while no task is selected — the device's own and owned by no task, which is exactly the state the list
+is in then. The action is never offered for the worktree's hardware, which cannot
 own a conversation. Each row's menu carries every operation the repository performs on a conversation —
 open, rename, export, bind it to one or more of the worktree's tasks and clear any of those bindings,
 and delete under ADR-0010 — because the row, not the removed dock page, is now their only entry point.
 Opening a row shows that conversation and changes nothing else: the navigator keeps the selection the
 row was listed under, so the list the user just read stays where it was.
 
+The section is present whenever a PLC device is the selected target, including when the list it would
+show is empty, and it says which of the two states it is in. Its absence previously meant "this task
+owns no conversation", "this device has none that no task owns" and "the tasks are still loading" at
+once, and it was the only place a device's conversations could be started or reached from.
+
 Selecting a device, the hardware row, a worktree or a workbench names no task, so it clears the task
-selection: that state is the selected device's task-less list, which is what the section shows until a
-task row is picked. The open task detail yields with it, because the detail renders ahead of every other
-view and would otherwise show nothing of the scope the user picked while keeping the task it names as the
-selection. That reset is what keeps a conversation no task owns reachable once any task has been opened,
-and a task that owns no conversation therefore no longer takes the whole section off screen behind it.
+selection: that state is the selected device's whole conversation list, which is what the section shows
+until a task row is picked. The open task detail yields with it, because the detail renders ahead of
+every other view and would otherwise show nothing of the scope the user picked while keeping the task it
+names as the selection. That reset is what keeps a conversation no task owns reachable once any task has
+been opened, and a task that owns no conversation therefore no longer takes the whole section off screen
+behind it.
 
 ### Decision Details
 
 | Item | Content |
 |------|---------|
-| **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu carrying every operation the repository performs on a conversation. Opening a row is a content action: it does not change what the navigator is showing. |
+| **Decision** | A fifth flat section listing the conversations of the selected task, or — while no task is selected and a device is the selected target — every conversation that device owns, grouped by the task each one is related to, with a creation action in its header and a per-row menu carrying every operation the repository performs on a conversation. Opening a row is a content action: it does not change what the navigator is showing. |
 | **Header action** | Starts a conversation in the scope the section is showing: bound to the selected task, or the selected device's own and owned by no task while none is selected. Never offered for the hardware target, which cannot own a conversation. A task that owns no conversation starts its first one from its own detail page, whose `Sessions` header carries the same action. |
-| **Target selection** | Selecting a device, the hardware row, a worktree or a workbench clears the task selection, so the section returns to the selected device's task-less conversations. Activating the target that is already selected clears it too, because it is the same statement about the scope. The open task detail closes with the selection, so the scope the user picked is what the main area shows. |
+| **Presence** | Rendered whenever a PLC device is the selected target, including with nothing to list, where it says so. Absent for the hardware target, which cannot own a conversation, and for a worktree or project whose own row is the deepest selection, which names no device to scope a list to. |
+| **Target selection** | Selecting a device, the hardware row, a worktree or a workbench clears the task selection, so the section returns to the selected device's whole conversation list. Activating the target that is already selected clears it too, because it is the same statement about the scope. The open task detail closes with the selection, so the scope the user picked is what the main area shows. |
 | **Row menu** | The conversation's only entry point, so it holds open, rename, export, bind it to one or more tasks or clear any of those bindings, and delete. Binding is a searchable picker over the worktree's tasks that can own a conversation — never a prompt for a raw task id — with one check per task: a click sets that binding, a second click clears it, and the resulting set is applied in one operation (ADR-0014). |
 | **Row open** | Opens the conversation in the chat view of the scope that is already selected, and leaves the workbench, worktree, device and task selection untouched. A conversation whose device is not the selected one — which the worktree's own task surface can ask for — has no device workspace to open in, so it opens in the worktree-level chat view, the one scope without a device. |
 | **Row contents** | The section is a view of the device's conversation list, not a copy of it: it is re-read wherever that list changes, so a conversation renamed, deleted or re-bound in any surface is reflected in the section without a reload. Its menu is visible without hovering, like the navigator's other row menus. |
+| **Worktree conversation tab** | The worktree surface's tab strip carries a `Sessions` tab listing every conversation the worktree holds, in the cards/list duality its `Tasks` tab already offers, with a search over them and the same row operations. It reads `GET …/worktrees/{wt}/sessions`, not a device's list, so a conversation whose header names no device is reachable there and nowhere else. It complements this section rather than replacing it: the section is what the selected scope is working in, and the tab is what the worktree holds. |
 | **Why this** | It keeps the cascade one section per scope level, keeps every list bounded and scrollable on its own, and makes the list say exactly what the row above it says is selected, without reopening the nesting ADR-0006 removed. |
-| **Known unknowns** | Whether a conversation ever needs to be reachable without its task outside the task-less case this rule now covers, whether the section needs a cap once a task accumulates many conversations, and whether a conversation related to several tasks needs an indication of that in its row. |
-| **Reconsider when** | Users ask to reach a conversation from the navigator without selecting the task that owns it. The first condition this list originally carried — conversations belonging to several tasks at once — was met and answered by ADR-0014 v1.0; the section still lists one task's conversations at a time. |
+| **Known unknowns** | Whether the section needs a cap once a device accumulates many conversations or many groups, and whether a conversation related to several tasks needs an indication of that in its row. |
+| **Reconsider when** | A conversation has to be reachable without naming its device at all — a worktree-wide list, which is the worktree surface's own concern and not this cascade's, whose every section is scoped by the row above it. The two conditions this list carried before were met and answered: conversations belonging to several tasks at once by ADR-0014 v1.0, and reaching a conversation without selecting the task that owns it by v1.5 above. |
 
 ### Placement
 
@@ -131,14 +151,21 @@ and a task that owns no conversation therefore no longer takes the whole section
 
 | Option | Fit | Cost |
 |---|---|---|
-| The selected task's conversations; the device's task-less conversations while no task is selected | Answers "what is this task carrying", which is what the section is for, and keeps the answer true when no task is selected | Two rules to state, and the section's content changes when the task selection changes |
+| The selected task's conversations; the device's task-less conversations while no task is selected (the rule from v1.0 to v1.4, replaced) | Answers "what is this task carrying", which is what the section is for, and keeps the answer true when no task is selected | Two rules to state, and a device's task-bound conversations are out of reach from the navigator unless their own task is selected |
 | The selected target's task-bound conversations, grouped by task (the rule as first decided, replaced) | Shows every conversation the target holds without needing a task selection | Lists conversations of tasks the user is not working on, so selecting a device shows a list unrelated to the selected task |
 | Only the selected task's conversations, with nothing when no task is selected | One rule, and the section is only ever about one task | A worktree's task-less conversations stay unreachable from the navigator, and the live `master` worktree is exactly that case |
 | Every conversation in the worktree, ignoring the target | One list to scan | Stops being target-scoped, so it would contradict the cascade it sits in |
+| The selected task's conversations while one is selected; otherwise every conversation of the selected device, grouped by the task that owns each (current) | Answers "what is this task carrying" while a task is selected, and makes the device's whole list reachable — including task-bound conversations whose task the user has not opened — when the device is what the user picked | The section can show more than one group, and its content changes with the task selection |
 
-**Selected**: the first, on the user's decision after using the second. The section's heading names the
-task it is showing, or that the conversations shown belong to no task, so the list never has to be
-guessed at.
+**Selected**: the last, on the user's decision after living with the first. A selected device names no
+task, so its section is the device's own list read in full rather than one slice of it; a selected task
+is the one list that task is carrying. Each group's heading names the task it holds, or that the
+conversations under it belong to no task, so the list never has to be guessed at.
+
+The `No task` group is the conversation with no task relation at all. A conversation whose relation
+names a task that no longer resolves is grouped under that id rather than silently folded into `No
+task`: the relation is the graph's, this section does not get to decide it is gone, and a group named by
+an id is still reachable, which is the property this rule exists to give.
 
 ## Rationale
 
@@ -163,9 +190,15 @@ guessed at.
   sections can never disagree about which task the user is working in.
 - A conversation that belongs to no task is reachable from the navigator, which is the only state the
   live `master` worktree's conversations are in.
+- A device's whole conversation list is reachable from the one surface that lists it: selecting the
+  device shows every conversation it owns, so a task-bound conversation does not need its own task row to
+  be found first, and the user does not have to know which task a conversation was recorded against.
 - It stays reachable after a task has been opened: selecting a target names no task, so the device's
-  task-less list is one selection away, and a task that owns no conversation can no longer hide the
-  section behind an empty list of its own.
+  whole list is one selection away, and a task that owns no conversation can no longer hide the section
+  behind an empty list of its own.
+- The section is never absent while a device is selected, so its presence no longer has to be
+  interpreted: an empty list says so in words, and the header action that starts a conversation is always
+  there to be used.
 - Reading a conversation leaves the navigator where it was, so the list a row was read from is still
   there when the user comes back to it, and the task selection is not lost with the task detail.
 - Retiring the right dock's "AI sessions" page loses no capability: export and task binding, which only
@@ -179,22 +212,18 @@ guessed at.
 
 - The navigator's cascade is no longer the four sections ADR-0006 fixed, so that ADR's shape needs this
   amendment rather than standing alone.
-- The section holds one thing at a time: it cannot show two tasks' conversations side by side, and a
-  worktree with many task-less conversations shows them together, with the heading as the only signal
-  that they are not one task's.
+- The section is no longer "one thing at a time" while a device is the selection: it shows that device's
+  whole list as several groups, so a device with many conversation-owning tasks is a longer scroll than
+  the single list it replaced, and the deepest section's share of the dock is what bounds it.
 - A conversation several tasks share is listed under each of them, so the same row can be read under
   two headings with nothing in the row itself saying it belongs to both.
 - Selecting the hardware row leaves the section with nothing to show, because a hardware task cannot own
-  a conversation at all, and the device scope the task-less rule needs does not exist there either.
-- The section is absent, rather than empty, whenever its rule yields nothing, so its absence can mean
-  "this task has no conversations", "this device has none that no task owns", or "the tasks are still
-  loading"; the heading the section shows when it is present is what tells the first two apart.
-- The header action lives in the section, so a state whose list is empty shows no section and therefore
-  no action: a selected task that owns no conversation cannot start its first one from here, and neither
-  can a device that has no task-less conversation. The task's own page offers creation for the first case
-  — its `Sessions` header starts the conversation and then yields the main area to it — and the chat
-  surface's empty state covers the second. Rendering the section whenever a device is selected would
-  contradict the content rule above, which is why the second gap is stated rather than closed.
+  a conversation at all, and the device scope the grouped rule needs does not exist there either.
+- A conversation whose relation names a task the worktree no longer holds is grouped under that task id,
+  so its heading is an id rather than a title. Keeping it listed is the point — the alternative is a
+  conversation with no surface — but the heading is only as good as the relation it is built from.
+- While the worktree's tasks are still loading, a conversation related to one of them is grouped under
+  its id for that moment; the group is renamed by the title as soon as the list arrives.
 
 ### Neutral Consequences
 
@@ -213,13 +242,24 @@ resolve. That the dock then resolved a device on a chat or source view to *no do
 superseded on 2026-10-08 by `ADR-0015`: the right dock is a shell-owned rail that exists on every
 surface, and `contextDock` derives each of its pages' content instead of the dock's visibility.
 
+The worktree surface's own conversation tab adds one read-only route, `GET
+/api/workbenches/{wb}/worktrees/{wt}/sessions`, which lists the worktree's session directory and
+projects the same graph relations the per-device list does. It is additive: no existing route changes,
+nothing persisted changes, and the delete, rename and relation operations keep going through the
+device-scoped routes they already use. `WorktreeSessionsPanel` owns its own load, as the worktree's task
+panel does, and the conversation operations it shares with the navigator's rows live in one place
+(`studio/src/studio/workbench/SessionOperations.tsx`) so two surfaces cannot offer diverging copies of
+them.
+
 ## Implementation Guidance
 
 Load the conversations the way the task surface already does: fan out the existing per-device list over
 the selected worktree's devices, then select from that fan-out by the task the `TASKS` section shows as
 selected — the task whose detail is open, or the task row last clicked, the same expression that
-highlights the row — and fall back to the selected device's task-less conversations when that selection
-is empty. Keep the device on each loaded conversation, because a row's open, export, re-binding and
+highlights the row — and, when that selection is empty, group the selected device's whole list instead:
+the conversations no task is related to first, then one group per task that owns one, which is the same
+list the device's own section was always reading, read in full. Keep the device on each loaded
+conversation, because a row's open, export, re-binding and
 delete need the device that owns it and a task-less conversation has no task to carry it. Reuse
 `TaskSessionsDisclosure`'s row content and its relative-time formatting for the row itself, but keep the
 rows always visible: the section is the container, so a disclosure inside it would be a second,
@@ -273,6 +313,8 @@ reachable.
 | 2026-10-05 | 1.2 | The task selection is cleared whenever the selected target changes, and activating the target that is already selected clears it too: a target selection names no task, so the section returns to the selected device's task-less conversations and a conversation no task owns stays reachable after a task has been opened. The open task detail closes with that selection, so the picked scope is what the main area shows. A task that owns no conversation starts its first one from its own detail page, whose `Sessions` header carries the section's creation action — closing the first of the two gaps the negative consequences recorded. |
 | 2026-10-08 | 1.3 | A conversation may be related to several tasks, so the row menu's binding becomes a set: a searchable picker with one check per task, where a second click clears that binding and the set is applied in one operation. The content rule is unchanged — the section still lists the selected task's conversations, and a conversation several tasks share is now listed by each of them — and the task-less case remains the conversation with no relation at all. This answers the first condition this ADR recorded under **Reconsider when**; the relation itself, its ownership by the engineering graph and the primary relation are [ADR-0014](ADR-0014-session-task-relations-belong-to-the-graph.md). |
 | 2026-10-08 | 1.4 | The amendment's clause that a device on a chat or source view resolves to no dock at all is superseded by `ADR-0015`: the right dock is a shell-owned icon rail that exists on every surface, so this section is still the only surface that *lists* a device's conversations, but its absence is no longer what the dock expresses. |
+| 2026-10-09 | 1.5 | A selected device no longer shows only its task-less conversations: the section shows every conversation the device owns, grouped by the task each one is related to, with the conversations no task owns first. The task selection keeps its single list, and selecting a device — which names no task — is what widens the list. The section is now rendered whenever a PLC device is the selected target, including with nothing to list, where it says so, so its presence no longer has to be interpreted and its creation action is always available. This answers the section's second recorded gap and the second condition under **Reconsider when**. |
+| 2026-10-09 | 1.6 | The worktree surface gains its own conversation list: a `Sessions` tab beside `Tasks`, in the same cards/list duality, with a search and the same row operations, reading a new read-only `GET …/worktrees/{wt}/sessions`. It is the surface for a worktree that has accumulated many conversations, and the only list that can reach a conversation whose header names no device — which the per-device routes must keep omitting. This section stays the scope-scoped list; the tab is the worktree's. The row operations are now held once, in `SessionOperations.tsx`, and used by both. |
 
 ## Related Information
 

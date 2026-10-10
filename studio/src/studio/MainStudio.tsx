@@ -64,7 +64,7 @@ import HardwareBomView from '@/studio/HardwareBomView'
 import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
-import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
+import WorktreeLandingPage, { type WorktreeLandingTab } from '@/studio/workbench/WorktreeLandingPage'
 import AllProjectsLandingPage from '@/studio/workbench/AllProjectsLandingPage'
 import TaskDetail, { type TaskEditPatch, type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import TaskCreateDialog from '@/studio/workbench/TaskCreateDialog'
@@ -106,7 +106,7 @@ const STAGE_SOURCE_OBJECT_TOOL = 'stage_task_source_object'
 
 export type MainView =
   | { kind: 'project' }
-  | { kind: 'worktree'; tab: 'overview' | 'tasks' }
+  | { kind: 'worktree'; tab: WorktreeLandingTab }
   | { kind: 'task-chat' }
   | { kind: 'hardware'; page: 'tree' | 'bom' | 'network' }
   | { kind: 'device' }
@@ -508,6 +508,7 @@ export default function MainStudio() {
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
   const [mainView, setMainView] = useState<MainView>({ kind: 'project' })
   const [worktreeTaskViewMode, setWorktreeTaskViewMode] = useState<'cards' | 'list'>('cards')
+  const [worktreeSessionViewMode, setWorktreeSessionViewMode] = useState<'cards' | 'list'>('cards')
   const [taskDetail, setTaskDetail] = useState<api.EngineeringTaskDetail | null>(null)
   const [taskDetailTask, setTaskDetailTask] = useState<api.EngineeringTask | null>(null)
   const [taskDetailLoading, setTaskDetailLoading] = useState(false)
@@ -1441,6 +1442,30 @@ export default function MainStudio() {
       const session = await api.renameChatSession(sessionId, title)
       setChatTabs(previous => renameTab(previous, sessionId, session.header.title?.trim() || title))
       await refreshChatSessions()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  /**
+   * Renames a conversation from the worktree's own conversation list. The rename route resolves the
+   * conversation through the selected device, so that device is selected first — the same step binding
+   * a conversation already takes — because the list is reachable with no device selected at all.
+   */
+  const renameSessionFromWorktree = async (session: api.ChatSessionInfo, title: string) => {
+    const { workbenchId, worktreeId, deviceId } = session
+    if (!workbenchId || !worktreeId || !deviceId) {
+      showErrorToast('This conversation is not available in the device context that owns it.')
+      return
+    }
+    setChatBusy(true)
+    try {
+      await api.selectDevice(workbenchId, worktreeId, deviceId)
+      const renamed = await api.renameChatSession(session.sessionId, title)
+      setChatTabs(previous => renameTab(previous, session.sessionId, renamed.header.title?.trim() || title))
+      await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -2522,6 +2547,16 @@ export default function MainStudio() {
       onOpenTaskSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
       taskViewMode={worktreeTaskViewMode}
       onTaskViewModeChange={setWorktreeTaskViewMode}
+      sessionViewMode={worktreeSessionViewMode}
+      onSessionViewModeChange={setWorktreeSessionViewMode}
+      // The worktree's own conversation list performs the same operations a navigator row does, so it
+      // hands them the same way: opening keeps the selection as it is, and the rest name the device
+      // the conversation itself carries rather than the one that happens to be selected.
+      onOpenSession={session => void openNavigatorSession(session)}
+      onRenameSession={(session, title) => renameSessionFromWorktree(session, title)}
+      onExportSession={session => exportChatSession(session)}
+      onSetSessionTasks={(session, taskIds, primaryTaskId) => setChatSessionTasks(session, taskIds, primaryTaskId)}
+      onDeleteSession={session => deleteNavigatorSession(session)}
     />
   ) : null
 
