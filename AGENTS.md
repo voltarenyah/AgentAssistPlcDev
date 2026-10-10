@@ -16,7 +16,6 @@ disagree, the `docs/` file wins and the nested file is the one to fix.
 - UI specifications: `docs/ui-spec/`
 - Implementation plans: `docs/plans/`
 - Prompts written ahead of execution, and the queue an agent runs them from: `docs/agent-prompts/README.md`
-- Codex worker operations: `docs/local-codex-worker.md`
 
 `docs/superpowers/` holds historical plans and specifications (July–August 2026): background, not current authority.
 
@@ -437,18 +436,6 @@ relevant validation passes, unrelated changes are excluded, the diff has been
 reviewed, the branch contains the intended commits, a PR is ready for human
 review, and remaining risks are documented. The agent must not merge the PR
 unless explicitly instructed.
-
-### Unattended local Codex automation
-
-Unattended issue, revision, cleanup, and deployment runs follow the same issue
-scope, focused/broad validation, reviewed draft-PR, and no-merge rules above.
-Each run gets an isolated worktree named with the worker's own
-`codex/<issue>-<slug>` branch prefix; work started by an interactive agent
-follows the `dsh/` convention above. Those runs must preserve the primary
-checkout and unrelated user changes; the wrapper owns commits, pushes, labels,
-comments, and PR publication while Codex edits only the active issue worktree.
-See [docs/local-codex-worker.md](docs/local-codex-worker.md) for the operational
-trust, monitoring, recovery, and deployment procedures.
 
 ## Cost-controlled Codex orchestration
 
